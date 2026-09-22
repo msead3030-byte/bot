@@ -150,6 +150,14 @@ class TelegramApi {
   }
 
   sendPhoto(chatId, photo, options = {}) {
+    if (typeof photo === "string" && fs.existsSync(photo)) {
+      return this.requestMultipart("sendPhoto", {
+        chat_id: chatId,
+        ...options,
+      }, {
+        photo: { path: photo }
+      });
+    }
     return this.request("sendPhoto", {
       chat_id: chatId,
       photo,
@@ -157,7 +165,24 @@ class TelegramApi {
     });
   }
 
+  editMessageCaption(chatId, messageId, caption, options = {}) {
+    return this.request("editMessageCaption", {
+      chat_id: chatId,
+      message_id: messageId,
+      caption,
+      ...options,
+    });
+  }
+
   sendDocument(chatId, document, options = {}) {
+    if (typeof document === "string" && fs.existsSync(document)) {
+      return this.requestMultipart("sendDocument", {
+        chat_id: chatId,
+        ...options,
+      }, {
+        document: { path: document }
+      });
+    }
     return this.request("sendDocument", {
       chat_id: chatId,
       document,

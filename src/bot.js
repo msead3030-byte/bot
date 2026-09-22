@@ -1,8 +1,11 @@
 "use strict";
-//igfuookhfjbodbildk 
 
+const fs = require("fs");
+const path = require("path");
 const { sleep } = require("./TelegramApi");
 const { t } = require("./i18n");
+
+const BANNER_PATH = path.join(__dirname, "..", "assets", "store_banner.jpg");
 
 const log = {
   _fmt(level, tag, msg, ctx) {
@@ -214,22 +217,24 @@ function homeKeyboard(isStaff = false, lang = "ar") {
   return {
     inline_keyboard: [
       [
-        { text: isAr ? "🛒 تصفح المنتجات" : "🛒 Browse Store", callback_data: "main:shop" },
-        { text: isAr ? "⚡ شحن الرصيد الفوري" : "⚡ Instant Top-up", callback_data: "main:topup" },
+        { text: isAr ? "⚡ شـحـن رصـيـد صـاعـق (فـوري)" : "⚡ Instant Cyber Top-up", callback_data: "main:topup" },
       ],
       [
-        { text: isAr ? "💰 محفظتي" : "💰 My Wallet", callback_data: "main:balance" },
-        { text: isAr ? "📦 سجل طلباتي" : "📦 My Orders", callback_data: "main:orders" },
+        { text: isAr ? "🎮 تصفح المتجر الرقمي" : "🎮 Browse Store", callback_data: "main:shop" },
+        { text: isAr ? "🔍 بحث سريع" : "🔍 Search Depot", callback_data: "main:search" },
       ],
       [
-        { text: isAr ? "🔍 بحث عن منتج" : "🔍 Search Product", callback_data: "main:search" },
-        { text: isAr ? "👤 حسابي" : "👤 My Account", callback_data: "main:account" },
+        { text: isAr ? "💼 محفظتي وكشف الحساب" : "💼 Cyber Wallet", callback_data: "main:balance" },
+        { text: isAr ? "📋 سجل مشترياتي" : "📋 Order Logs", callback_data: "main:orders" },
       ],
       [
-        adminContactButton(isAr ? "💬 الدعم الفني" : "💬 Support"),
-        { text: isAr ? "🌐 اللغة / Language" : "🌐 Language / اللغة", callback_data: "main:language" },
+        { text: isAr ? "👤 الملف الشخصي" : "👤 User Profile", callback_data: "main:account" },
+        adminContactButton(isAr ? "💬 الدعم السيبراني" : "💬 Support Hub"),
       ],
-      ...(isStaff ? [[{ text: isAr ? "⚙️ لوحة الإدارة والتحكم" : "⚙️ Admin Control Panel", callback_data: "main:admin" }]] : []),
+      [
+        { text: isAr ? "🌐 اللغة ╏ Language" : "🌐 Language ╏ اللغة", callback_data: "main:language" },
+      ],
+      ...(isStaff ? [[{ text: isAr ? "⚙️ لوحة الإدارة والتحكم السيبرانية" : "⚙️ Cyber Admin Terminal", callback_data: "main:admin" }]] : []),
     ],
   };
 }
@@ -292,30 +297,45 @@ function productTypeKeyboard() {
   };
 }
 
+function renderCyberStockBar(count) {
+  if (count <= 0) return "🔴 [░░░░░░░░░░] 0% (نفد المخزون)";
+  const maxVisual = 20;
+  const filled = Math.min(10, Math.max(1, Math.round((Math.min(count, maxVisual) / maxVisual) * 10)));
+  const empty = 10 - filled;
+  const pct = Math.min(100, Math.round((count / maxVisual) * 100));
+  const color = count > 5 ? "🟢" : "🟠";
+  return `${color} [${"█".repeat(filled)}${"░".repeat(empty)}] ${pct}% (${count} متاح)`;
+}
+
 function productListKeyboard(products) {
-  const rows = products.map((product, idx) => {
+  const rows = products.map((product) => {
     let stockBadge = "";
     if (product.fulfillment_type === "ready_stock") {
       const count = product.available_stock || 0;
-      if (count > 5) stockBadge = ` • 🟢 متوفر (${count})`;
-      else if (count > 0) stockBadge = ` • 🟠 قليل (${count})`;
-      else stockBadge = ` • 🔴 نفد المخزون`;
+      if (count > 5) stockBadge = ` • 🟢 [${count}]`;
+      else if (count > 0) stockBadge = ` • 🟠 [${count}]`;
+      else stockBadge = ` • 🔴 [نفد]`;
     } else {
-      stockBadge = ` • 🛠️ خدمة بمساعدة`;
+      stockBadge = ` • 🛠️ [خدمة]`;
     }
-    return [{ text: `${idx + 1}. ${product.title} — ${formatMoney(product.price_piasters)}${stockBadge}`, callback_data: `product:${product.id}` }];
+    return [{ text: `🎮 ${product.title} ╏ ${formatMoney(product.price_piasters)}${stockBadge}`, callback_data: `product:${product.id}` }];
   });
-  rows.push([{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }]);
+  rows.push([
+    { text: "⚡ شحن رصيد", callback_data: "main:topup" },
+    { text: "🏠 القائمة الرئيسية", callback_data: "main:home" },
+  ]);
   return { inline_keyboard: rows };
 }
 
 function productActions(product, isAvailable = true) {
   const rows = [];
   if (isAvailable) {
-    rows.push([{ text: `💳 شراء الآن • ${formatMoney(product.price_piasters)}`, callback_data: `buy:${product.id}` }]);
+    rows.push([{ text: `💳 شراء فوري الآن ╏ ${formatMoney(product.price_piasters)}`, callback_data: `buy:${product.id}` }]);
   }
-  rows.push([{ text: "👈 العودة للمتجر", callback_data: "main:shop" }]);
-  rows.push([{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }]);
+  rows.push([
+    { text: "👈 عودة للمتجر", callback_data: "main:shop" },
+    { text: "🏠 القائمة الرئيسية", callback_data: "main:home" },
+  ]);
   return { inline_keyboard: rows };
 }
 
@@ -348,71 +368,88 @@ function homeText(store, userId, from = {}) {
   const user = store.getUser(userId) || from;
   const name = displayName(user);
   const balance = formatMoney(store.balance(userId));
-  const brand = brandName();
+  const brand = brandName().toUpperCase();
 
   if (lang === "en") {
     return [
-      "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
-      `🌩️  ${brand.toUpperCase()}  🌩️`,
-      "⚡ High-Speed Digital Store Experience ⚡",
-      "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
+      `╔══════════════════════════════╗`,
+      `  ⚡  ${brand}  ⚡`,
+      `  [ CYBERNETIC DIGITAL TERMINAL ]`,
+      `╚══════════════════════════════╝`,
       "",
-      `👤 Customer: **${escMd(name)}** \`(${userId})\``,
-      `💰 Wallet Balance: **${balance}** ⚡`,
-      "🟢 System Status: **Online & Ready 24/7** 🚀",
-      "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-      "🛍️ Instant Delivery Digital Cards & Game Accounts",
-      "⚡ Automatic Instant Top-up via Vodafone Cash & InstaPay!",
-      "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-      "👇 Choose an option from below to get started:",
+      `◈ Customer ╏ **${escMd(name)}**`,
+      `◈ User ID  ╏ \`${userId}\``,
+      `◈ Balance  ╏ **${balance}** ⚡`,
+      `◈ Server   ╏ 🟢 [ONLINE: 24/7 ULTRA-FAST]`,
+      "",
+      `╭─[ ⚡ INSTANT AUTO TOP-UP ]──────────`,
+      `│ Vodafone Cash & InstaPay credited in seconds!`,
+      `╰─────────────────────────────────`,
+      "",
+      `🕹️ Instant delivery gaming cards, keys & subscriptions.`,
+      `👇 Select an action from the cyber console below:`,
     ].join("\n");
   }
 
   return [
-    "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
-    `🌩️  صـاعـقـة الـمـتـجـر الـرقـمـي  🌩️`,
-    `⚡ مرحباً بك في متجر ${brand} الرسمي ⚡`,
-    "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
+    `╔══════════════════════════════╗`,
+    `  ⚡ صـاعـقـة الـمـتـجـر الـسـيـبـرانـي ⚡`,
+    `  [ ${brand} • DIGITAL HUB ]`,
+    `╚══════════════════════════════╝`,
     "",
-    `👤 العميل: **${escMd(name)}** \`(${userId})\``,
-    `💰 رصيدك الحالي: **${balance}** ⚡`,
-    "🟢 حالة النظام: **متصل وجاهز للخدمة الفورية 24/7** 🚀",
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-    "🛍️ تسليم فوري وتلقائي لكروت وشحنات الألعاب والاشتراكات",
-    "⚡ شحن رصيدك آلياً في ثوانٍ عبر فودافون كاش وإنستاباي!",
-    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
-    "👇 اختر من القائمة للانطلاق:",
+    `◈ المـسـتـخـدم ╏ **${escMd(name)}**`,
+    `◈ مـعـرّف الـحـسـاب ╏ \`${userId}\``,
+    `◈ رصـيـد الـمـحـفـظـة ╏ **${balance}** ⚡`,
+    `◈ حـالـة الـنـظـام ╏ 🟢 [مـتـصـل ونـشـط 24/7]`,
+    "",
+    `╭─[ ⚡ شـحـن صـاعـق فـوري وذاتـي ]───────`,
+    `│ فودافون كاش & إنستاباي - الرصيد ينزل بالثواني!`,
+    `╰─────────────────────────────────`,
+    "",
+    `🎮 كروت ألعاب، اشتراكات رقمية، وتسليم فوري لا يتوقف.`,
+    `👇 اختر وجهتك من لوحة التحكم السيبرانية أدناه:`,
   ].join("\n");
 }
 
 function productText(store, userId, product) {
   const price = store.effectivePrice(userId, product);
   let stockLine = "";
+  let deliveryLine = "";
   if (product.fulfillment_type === "ready_stock") {
     const count = product.available_stock || 0;
-    if (count > 5) stockLine = `📊 المخزون: 🟢 متوفر بكثرة (${count} قطعة)`;
-    else if (count > 0) stockLine = `📊 المخزون: 🟠 كمية قليلة متبقية (${count} قطعة)`;
-    else stockLine = `📊 المخزون: 🔴 غير متوفر حالياً`;
+    stockLine = `◈ الـمـخـزون ╏ ${renderCyberStockBar(count)}`;
+    deliveryLine = `◈ نـوع الـتـسـلـيـم ╏ ⚡ تسليم فوري وتلقائي (Ready Stock)`;
   } else {
-    stockLine = `🛠️ النوع: تسليم بمساعدة البائع (يقوم البائع بتنفيذ طلبك بعد الشراء)`;
+    stockLine = `◈ الـمـخـزون ╏ 🟢 متاح حسب الطلب`;
+    deliveryLine = `◈ نـوع الـتـسـلـيـم ╏ 🛠️ تسليم بمساعدة التاجر (تنفيذ سريع)`;
   }
 
   const lines = [
-    `🏷️ القسم: ${product.category}`,
-    `💵 السعر: ${formatMoney(price)}`,
-    stockLine,
+    `╔══════════════════════════════╗`,
+    `  📦 ${product.title}`,
+    `╚══════════════════════════════╝`,
     "",
-    "📝 الوصف والتفاصيل:",
-    product.description || "لا يوجد وصف إضافي.",
+    `◈ الـقـسـم ╏ 🏷️ ${product.category}`,
+    `◈ الـسـعـر ╏ 💵 **${formatMoney(price)}**`,
+    stockLine,
+    deliveryLine,
+    "",
+    `╭─[ 📝 الـمـواصـفـات والـتـفـاصـيـل ]────────`,
+    `│ ${product.description || "لا يوجد وصف إضافي مضاف لهذا المنتج."}`,
+    `╰─────────────────────────────────`,
   ];
-  return panel(`📦 ${product.title}`, lines);
+  return lines.join("\n");
 }
 
 async function safeEditOrSend(api, chatId, messageId, text, options = {}) {
   if (messageId) {
     try {
       return await api.editMessageText(chatId, messageId, text, options);
-    } catch { }
+    } catch {
+      try {
+        return await api.editMessageCaption(chatId, messageId, text, options);
+      } catch { }
+    }
   }
   return api.sendMessage(chatId, text, options);
 }
@@ -422,29 +459,34 @@ async function showHome(api, store, superAdmins, chatId, from, messageId = null)
   const stf = staffStatus(store, superAdmins, id);
   const lang = store.getUserLanguage(id);
   const inlineKbd = homeKeyboard(stf.isSuperAdmin || stf.isMerchant, lang);
+  const caption = homeText(store, id, from);
 
   if (messageId) {
-    return safeEditOrSend(api, chatId, messageId, homeText(store, id, from), {
+    return safeEditOrSend(api, chatId, messageId, caption, {
       parse_mode: "Markdown",
       reply_markup: inlineKbd,
     });
   }
 
-  // When /start or new text command: Electric thunderstrike opening!
-  try {
-    const flashMsg = await api.sendMessage(chatId, "⚡⚡⚡ جاري تفريغ صاعقة المتجر... 🌩️⚡", {
-      reply_markup: replyMenuKeyboard(stf.isSuperAdmin || stf.isMerchant, lang),
-    });
-    if (flashMsg && flashMsg.message_id) {
-      await sleep(250);
-      return await api.editMessageText(chatId, flashMsg.message_id, homeText(store, id, from), {
+  // Anchor persistent reply menu at bottom
+  await api.sendMessage(chatId, "⚡", {
+    reply_markup: replyMenuKeyboard(stf.isSuperAdmin || stf.isMerchant, lang),
+  }).catch(() => { });
+
+  // Send visual Cyber Store Banner Photo if present on disk
+  if (fs.existsSync(BANNER_PATH)) {
+    try {
+      return await api.sendPhoto(chatId, BANNER_PATH, {
+        caption,
         parse_mode: "Markdown",
         reply_markup: inlineKbd,
       });
+    } catch (err) {
+      console.warn("[showHome] sendPhoto failed, fallback to text:", err.message);
     }
-  } catch { }
+  }
 
-  return api.sendMessage(chatId, homeText(store, id, from), {
+  return api.sendMessage(chatId, caption, {
     parse_mode: "Markdown",
     reply_markup: inlineKbd,
   });
@@ -453,37 +495,62 @@ async function showHome(api, store, superAdmins, chatId, from, messageId = null)
 async function showShop(api, store, chatId, messageId = null) {
   const allProducts = store.listProducts({ status: "active" });
   const products = allProducts.slice(0, 30);
-  const lines = products.length
-    ? [`عدد المنتجات المتاحة حالياً: ${allProducts.length} منتج`, "اختر المنتج الذي تريده لمشاهدة التفاصيل والشراء:"]
-    : ["لا توجد منتجات معروضة حالياً."];
-  if (allProducts.length > 30) lines.push(`(يتم عرض أول 30 منتج من ${allProducts.length})`);
-  const text = panel("🛒 متجر المنتجات المتاحة", lines);
-  await safeEditOrSend(api, chatId, messageId, text, { reply_markup: productListKeyboard(products) });
+  const lines = [
+    `╔══════════════════════════════╗`,
+    `  🛒 مـتـجـر الـكـروت والـمـنـتـجـات  ⚡`,
+    `╚══════════════════════════════╝`,
+    "",
+    products.length
+      ? `🎮 يتوفر حالياً: **${allProducts.length}** منتج جاهز للشراء الفوري.\nاختر المنتج لمشاهدة شريط المخزون وتأكيد الطلب:`
+      : `⚠️ لا توجد منتجات معروضة حالياً في المتجر.`,
+  ];
+  if (allProducts.length > 30) lines.push(`(يتم عرض أول 30 منتج من إجمالي ${allProducts.length})`);
+  const text = lines.join("\n");
+  await safeEditOrSend(api, chatId, messageId, text, { parse_mode: "Markdown", reply_markup: productListKeyboard(products) });
 }
 
 async function showBalance(api, store, chatId, userId, messageId = null) {
   const lang = store.getUserLanguage(userId);
   const entries = store.ledger(userId, 10);
-  const lines = [`💰 رصيدك الحالي: ${formatMoney(store.balance(userId))}`];
+  const lines = [
+    `╔══════════════════════════════╗`,
+    `  💼 الـمـحـفـظـة الـسـيـبـرانـيـة ⚡`,
+    `╚══════════════════════════════╝`,
+    "",
+    `◈ رصـيـدك الـحـالـي ╏ **${formatMoney(store.balance(userId))}**`,
+    `◈ حـالـة الـحـسـاب ╏ 🟢 [مـفـعـل وجـاهـز لـلـشـراء]`,
+  ];
   if (entries.length) {
-    lines.push("", "📜 آخر العمليات في محفظتك:");
+    lines.push("", "╭─[ 📜 كـشـف آخـر الـحـركـات الـمـالـيـة ]───────");
     for (const entry of entries) {
       const sign = entry.amount_piasters >= 0 ? "➕" : "➖";
-      lines.push(`${sign} ${formatMoney(Math.abs(entry.amount_piasters))} • ${entry.note || entry.type}`);
+      lines.push(`│ ${sign} ${formatMoney(Math.abs(entry.amount_piasters))} • ${entry.note || entry.type}`);
     }
+    lines.push("╰─────────────────────────────────");
+  } else {
+    lines.push("", "💡 لا توجد حركات مالية سابقة في محفظتك حتى الآن.");
   }
-  await safeEditOrSend(api, chatId, messageId, panel("💰 محفظتي والحساب", lines), { reply_markup: subNavKeyboard(lang) });
+  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), { parse_mode: "Markdown", reply_markup: subNavKeyboard(lang) });
 }
 
 async function showOrders(api, store, chatId, userId, messageId = null) {
   const lang = store.getUserLanguage(userId);
   const orders = store.listUserPurchaseHistory(userId, 15);
-  const lines = orders.length ? [] : ["لا توجد لديك طلبات قائمة أو سابقة حتى الآن."];
-  for (const order of orders) {
-    const statusBadge = order.status === "completed" ? "✅ مكتمل" : order.status === "awaiting_delivery" ? "⏳ قيد التسليم" : `• ${order.status}`;
-    lines.push(`#${order.id} • ${order.product_title || "منتج"} • ${formatMoney(order.total_piasters)} • ${statusBadge}`);
+  const lines = [
+    `╔══════════════════════════════╗`,
+    `  📋 سـجـل الـطـلـبـات والـمـشـتـريـات`,
+    `╚══════════════════════════════╝`,
+    "",
+  ];
+  if (orders.length) {
+    for (const order of orders) {
+      const statusBadge = order.status === "completed" ? "🟢 مكتمل" : order.status === "awaiting_delivery" ? "⏳ قيد التنفيذ" : `⚪ ${order.status}`;
+      lines.push(`◈ **#${order.id}** ╏ ${order.product_title || "منتج"} • ${formatMoney(order.total_piasters)} • ${statusBadge}`);
+    }
+  } else {
+    lines.push("💡 لا توجد لديك طلبات قائمة أو سابقة في سجلك حتى الآن.");
   }
-  await safeEditOrSend(api, chatId, messageId, panel("📦 سجل طلباتي ومشترياتي", lines), { reply_markup: subNavKeyboard(lang) });
+  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), { parse_mode: "Markdown", reply_markup: subNavKeyboard(lang) });
 }
 
 async function showAccount(api, store, chatId, userId, from = {}, messageId = null) {
@@ -492,12 +559,17 @@ async function showAccount(api, store, chatId, userId, from = {}, messageId = nu
   const balance = store.balance(userId);
   const ordersCount = store.listUserPurchaseHistory(userId, 100).length;
   const lines = [
-    `👤 الاسم: ${escMd(displayName(user))}`,
-    `🆔 المعرف الرقمي: \`${userId}\``,
-    `💰 الرصيد الحالي: ${escMd(formatMoney(balance))}`,
-    `📦 إجمالي الطلبات: ${ordersCount} طلب`,
+    `╔══════════════════════════════╗`,
+    `  👤 مـلـف الـعـمـيـل الـرقـمـي`,
+    `╚══════════════════════════════╝`,
+    "",
+    `◈ الاسـم ╏ **${escMd(displayName(user))}**`,
+    `◈ الـمـعـرّف ╏ \`${userId}\``,
+    `◈ الـرصـيـد ╏ **${escMd(formatMoney(balance))}** ⚡`,
+    `◈ إجـمـالـي الـطـلـبـات ╏ **${ordersCount}** طلب`,
+    `◈ الـرتـبـة ╏ 🎖️ [VIP Member]`,
   ];
-  await safeEditOrSend(api, chatId, messageId, panel("👤 بيانات حسابي", lines), { parse_mode: "Markdown", reply_markup: subNavKeyboard(lang) });
+  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), { parse_mode: "Markdown", reply_markup: subNavKeyboard(lang) });
 }
 
 async function showContactAdmin(api, store, chatId, messageId = null) {

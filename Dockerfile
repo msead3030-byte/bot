@@ -16,6 +16,7 @@ RUN npm ci --only=production
 # Copy application source
 COPY bin ./bin
 COPY src ./src
+COPY assets ./assets
 COPY README.md DEVELOPER_RUNBOOK.md ./
 
 # Create directory for persistent volume mount
