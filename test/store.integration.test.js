@@ -9,6 +9,7 @@ const test = require("node:test");
 const { SecretBox } = require("../src/SecretBox");
 const { openStoreDatabase } = require("../src/StoreDatabase");
 const { StoreService } = require("../src/StoreService");
+const { parseSms } = require("../src/SmsParser");
 const { handleCallback, handleMessage } = require("../src/bot");
 const { bootstrapSuperAdmins } = require("../bin/m-automation-bot");
 
@@ -352,5 +353,95 @@ test("topup selection displays wallet and binance receiver details", async () =>
     }
   }
 });
+
+test("sms transfer parsing, duplicate prevention, and strict single-use claim security", () => {
+  const { store, cleanup } = fixture();
+  try {
+    store.ensureUser({ id: "10", first_name: "Alice" });
+    store.ensureUser({ id: "20", first_name: "Attacker Bob" });
+
+    // 1. Test SMS parser with Egyptian Vodafone Cash
+    const rawSms = "تم استلام مبلغ 150.00 جنيه من 01012345678 بنجاح في محفظة فودافون كاش. رقم العملية: 987654321.";
+    const parsed = parseSms(rawSms);
+    assert.ok(parsed);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.amountPiasters, 15000);
+    assert.equal(parsed.senderPhone, "01012345678");
+    assert.equal(parsed.trxId, "vf_987654321");
+
+    // 2. Record the SMS transfer
+    const rec1 = store.recordSmsTransfer(parsed);
+    assert.equal(rec1.duplicate, false);
+    assert.equal(rec1.transfer.status, "unclaimed");
+
+    // 3. Re-recording the exact same SMS transfer MUST be flagged duplicate
+    const rec2 = store.recordSmsTransfer(parsed);
+    assert.equal(rec2.duplicate, true, "Same transaction ID must be rejected as duplicate");
+
+    // 4. Alice creates a top-up for 150 EGP (15000 piasters)
+    const aliceTopup = store.createAutoTopup("10", 15000, "wallet", "01000000000");
+    assert.equal(aliceTopup.status, "pending");
+
+    // 5. Alice claims it with the matching sender number (even with international/Arabic format)
+    const claimResult = store.verifyAndClaimSmsTopup("10", aliceTopup.id, "+201012345678");
+    assert.equal(claimResult.ok, true);
+    assert.equal(claimResult.balance, 15000, "Alice balance must be credited exactly 150 EGP");
+    assert.equal(store.balance("10"), 15000);
+
+    // 6. Double claim by Alice on the same top-up is idempotent and doesn't add more money
+    const aliceAgain = store.verifyAndClaimSmsTopup("10", aliceTopup.id, "01012345678");
+    assert.equal(aliceAgain.alreadyCredited, true);
+    assert.equal(store.balance("10"), 15000, "Balance must not increase on repeat calls");
+
+    // 7. Attacker Bob tries to claim the SAME transfer with another topup
+    const bobTopup = store.createAutoTopup("20", 15000, "wallet", "01000000000");
+    const bobClaim = store.verifyAndClaimSmsTopup("20", bobTopup.id, "01012345678");
+    assert.equal(bobClaim.ok, false, "Bob must NOT be able to claim a transfer already claimed by Alice");
+    assert.equal(store.balance("20"), 0, "Bob balance must remain 0");
+
+    // 8. Verify ledger has exactly 1 entry for this transfer
+    const aliceLedger = store.ledger("10");
+    assert.equal(aliceLedger.length, 1);
+    assert.equal(aliceLedger[0].idempotency_key, "sms_topup:vf_987654321");
+  } finally {
+    cleanup();
+  }
+});
+
+test("auto-credit pending topup when SMS arrives later via webhook", () => {
+  const { store, cleanup } = fixture();
+  try {
+    store.ensureUser({ id: "30", first_name: "Charlie" });
+
+    // Charlie creates topup and enters his phone number FIRST
+    const charlieTopup = store.createAutoTopup("30", 5000, "wallet", "01000000000");
+
+    // Charlie submits his sender phone number (currently no transfer yet)
+    const attempt1 = store.verifyAndClaimSmsTopup("30", charlieTopup.id, "01098765432");
+    assert.equal(attempt1.ok, false);
+    assert.equal(store.balance("30"), 0);
+
+    // Now the SMS arrives from Vodafone Cash
+    const rawSms = "تم استلام مبلغ 50.00 جنيه من 01098765432 بنجاح. كود العملية: 5544332211.";
+    const parsed = parseSms(rawSms);
+    assert.ok(parsed);
+
+    // Webhook records SMS
+    store.recordSmsTransfer(parsed);
+
+    // Webhook checks findPendingTopupForSms
+    const pending = store.findPendingTopupForSms(parsed.senderPhone, parsed.amountPiasters);
+    assert.ok(pending, "Must find Charlie's pending topup");
+    assert.equal(pending.user_id, "30");
+
+    // Webhook executes claim
+    const autoClaim = store.verifyAndClaimSmsTopup(pending.user_id, pending.id, parsed.senderPhone);
+    assert.equal(autoClaim.ok, true);
+    assert.equal(store.balance("30"), 5000);
+  } finally {
+    cleanup();
+  }
+});
+
 
 

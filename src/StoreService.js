@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const { normalizePhoneNumber } = require("./SmsParser");
 
 const FULFILLMENT_TYPES = new Set(["ready_stock", "assisted"]);
 const MANUAL_PAYMENT_METHODS = new Set(["wallet", "binance"]);
@@ -46,9 +47,9 @@ function assertPositivePiasters(value, label = "Amount") {
 function assertTopupAmount(amountPiasters) {
   const amount = assertPositivePiasters(amountPiasters, "Top-up amount");
   if (amount < MIN_TOPUP_PIASTERS || amount > MAX_TOPUP_PIASTERS) {
-    throw new Error("Top-up amount is outside the allowed range.");
+    throw new Error("مبلغ الشحن يجب أن يكون بين 10 و 5,000 جنيه.");
   }
-  if (amount % 100 !== 0) throw new Error("Top-up amount must be a whole currency amount.");
+  if (amount % 100 !== 0) throw new Error("يرجى إدخال مبلغ صحيح بالجنيه بدون كسور، مثال: 50 أو 100.");
   return amount;
 }
 
@@ -428,6 +429,186 @@ class StoreService {
     })();
 
     return { ok: true, alreadyCredited: false, topup: this.getTopup(topup.id), balance: this.balance(id), payload: data };
+  }
+
+  recordSmsTransfer({ trxId, senderPhone, amountPiasters, provider = "vodafone_cash", rawMessage = "" }) {
+    if (!trxId) throw new Error("Transaction ID (trxId) is required.");
+    const cleanTrx = cleanText(trxId, 100);
+    const existing = this.db.prepare("SELECT * FROM sms_transfers WHERE trx_id = ?").get(cleanTrx);
+    if (existing) {
+      return { duplicate: true, transfer: existing };
+    }
+
+    const normPhone = normalizePhoneNumber(senderPhone);
+    const amount = Number(amountPiasters);
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error("Valid amount in piasters is required.");
+    const at = nowIso();
+
+    const result = this.db.prepare(`
+      INSERT INTO sms_transfers (trx_id, sender_phone, amount_piasters, provider, raw_message, status, received_at)
+      VALUES (?, ?, ?, ?, ?, 'unclaimed', ?)
+    `).run(cleanTrx, normPhone, amount, cleanText(provider, 30), cleanText(rawMessage, 2000), at);
+
+    const transfer = this.db.prepare("SELECT * FROM sms_transfers WHERE id = ?").get(result.lastInsertRowid);
+    return { duplicate: false, transfer };
+  }
+
+  createAutoTopup(userId, amountPiasters, paymentMethod = "wallet", receiverNumber = "") {
+    const user = safeTelegramId(userId, "User ID");
+    const amount = assertTopupAmount(amountPiasters);
+    if (!this.getUser(user)) this.ensureUser({ id: user });
+    const at = nowIso();
+    const orderId = orderRef("TOPUP");
+    const paymentIntentId = `auto_${crypto.randomBytes(8).toString("hex")}`;
+
+    const result = this.db.prepare(`
+      INSERT INTO topups (
+        user_id, amount_piasters, provider_order_id, payment_intent_id,
+        status, receiver_number, instructions, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+    `).run(user, amount, orderId, paymentIntentId, cleanText(receiverNumber, 50), cleanText(paymentMethod, 50), at, at);
+
+    return this.getTopup(result.lastInsertRowid);
+  }
+
+  verifyAndClaimSmsTopup(userId, topupId, senderPhone) {
+    const user = safeTelegramId(userId, "User ID");
+    const topup = this.getTopup(topupId);
+    if (!topup || topup.user_id !== user) {
+      throw new Error("طلب الشحن غير موجود.");
+    }
+    if (topup.status === "succeeded") {
+      return { ok: true, alreadyCredited: true, topup, balance: this.balance(user) };
+    }
+    if (topup.status !== "pending") {
+      throw new Error("طلب الشحن هذا لم يعد معلقاً (تم إلغاؤه أو معالجته مسبقاً).");
+    }
+
+    if (Number(topup.validate_attempts || 0) >= 5) {
+      throw new Error("تم تجاوز الحد الأقصى للمحاولات (5 محاولات). يرجى التواصل مع الدعم الفني.");
+    }
+
+    const normSender = normalizePhoneNumber(senderPhone);
+    if (!normSender || normSender.length < 10) {
+      throw new Error("يرجى إدخال رقم هاتف محفظة صحيح (مثال: 01012345678).");
+    }
+
+    // Save sender number and increment attempts
+    this.db.prepare(`
+      UPDATE topups
+      SET sender_identifier = ?, validate_attempts = validate_attempts + 1, updated_at = ?
+      WHERE id = ?
+    `).run(normSender, nowIso(), topup.id);
+
+    // Look for matching unclaimed SMS transfer:
+    const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
+    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - windowMinutes * 60 * 1000).toISOString();
+
+    const transfer = this.db.prepare(`
+      SELECT * FROM sms_transfers
+      WHERE status = 'unclaimed'
+        AND claimed_by_user_id IS NULL
+        AND sender_phone = ?
+        AND amount_piasters = ?
+        AND received_at >= ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(normSender, topup.amount_piasters, minReceivedAt);
+
+    if (!transfer) {
+      this.db.prepare(`
+        UPDATE topups
+        SET last_error = 'لم يتم العثور على تحويل مطابق حتى الآن', updated_at = ?
+        WHERE id = ?
+      `).run(nowIso(), topup.id);
+      return {
+        ok: false,
+        topup: this.getTopup(topup.id),
+        error: "لم يتم العثور على تحويل مطابق بهذا الرقم والمبلغ حتى الآن. يرجى التأكد من إتمام التحويل أو الانتظار ثوانٍ لإعادة المحاولة."
+      };
+    }
+
+    // Atomic transaction to claim transfer and credit user balance
+    let claimedTransfer = null;
+    this.db.transaction(() => {
+      // Re-verify transfer is still unclaimed inside transaction lock
+      const freshTransfer = this.db.prepare(`
+        SELECT * FROM sms_transfers
+        WHERE id = ? AND status = 'unclaimed' AND claimed_by_user_id IS NULL
+      `).get(transfer.id);
+
+      if (!freshTransfer) {
+        throw new Error("عذراً، هذا التحويل تم استخدامه بالفعل أو لم يعد متاحاً.");
+      }
+
+      const freshTopup = this.getTopup(topup.id);
+      if (freshTopup.status === "succeeded") return;
+
+      const at = nowIso();
+
+      // 1. Mark transfer as claimed
+      this.db.prepare(`
+        UPDATE sms_transfers
+        SET status = 'claimed', claimed_by_user_id = ?, claimed_topup_id = ?, claimed_at = ?
+        WHERE id = ?
+      `).run(user, topup.id, at, transfer.id);
+
+      // 2. Mark topup as succeeded
+      this.db.prepare(`
+        UPDATE topups
+        SET status = 'succeeded', last_error = '', updated_at = ?
+        WHERE id = ?
+      `).run(at, topup.id);
+
+      // 3. Credit ledger with strict unique idempotency key
+      this.db.prepare(`
+        INSERT INTO ledger (
+          user_id, type, amount_piasters, reference_type, reference_id, idempotency_key, note, created_at
+        ) VALUES (?, 'topup', ?, 'sms_transfer', ?, ?, ?, ?)
+      `).run(
+        user,
+        topup.amount_piasters,
+        String(transfer.id),
+        `sms_topup:${transfer.trx_id}`,
+        `شحن رصيد آلي عبر التحويل (${transfer.trx_id})`,
+        at
+      );
+
+      claimedTransfer = freshTransfer;
+    })();
+
+    return {
+      ok: true,
+      alreadyCredited: false,
+      transfer: claimedTransfer || transfer,
+      topup: this.getTopup(topup.id),
+      balance: this.balance(user),
+    };
+  }
+
+  findPendingTopupForSms(senderPhone, amountPiasters, receivedAt = nowIso()) {
+    const normPhone = normalizePhoneNumber(senderPhone);
+    const amount = Number(amountPiasters);
+    const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
+    const minCreatedAt = new Date(new Date(receivedAt).getTime() - windowMinutes * 60 * 1000).toISOString();
+
+    return this.db.prepare(`
+      SELECT * FROM topups
+      WHERE status = 'pending'
+        AND sender_identifier = ?
+        AND amount_piasters = ?
+        AND created_at >= ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(normPhone, amount, minCreatedAt) || null;
+  }
+
+  listRecentSmsTransfers(limit = 20) {
+    return this.db.prepare(`
+      SELECT * FROM sms_transfers
+      ORDER BY id DESC
+      LIMIT ?
+    `).all(Math.max(1, Math.min(100, Number(limit) || 20)));
   }
 
   createManualTopup(userId, paymentMethod, amountPiasters) {

@@ -181,6 +181,21 @@ function migrate(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS sms_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trx_id TEXT UNIQUE NOT NULL,
+      sender_phone TEXT NOT NULL,
+      amount_piasters INTEGER NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'vodafone_cash',
+      raw_message TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'unclaimed',
+      claimed_by_user_id TEXT,
+      claimed_topup_id INTEGER,
+      received_at TEXT NOT NULL,
+      claimed_at TEXT,
+      FOREIGN KEY (claimed_by_user_id) REFERENCES users(telegram_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_products_merchant ON products(merchant_id);
     CREATE INDEX IF NOT EXISTS idx_products_status ON products(status);
     CREATE INDEX IF NOT EXISTS idx_stock_product_status ON stock_items(product_id, status);
@@ -192,6 +207,9 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_ledger_user ON ledger(user_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_price_overrides_user ON user_price_overrides(user_id);
     CREATE INDEX IF NOT EXISTS idx_price_overrides_product ON user_price_overrides(product_id);
+    CREATE INDEX IF NOT EXISTS idx_sms_transfers_lookup ON sms_transfers(sender_phone, amount_piasters, status);
+    CREATE INDEX IF NOT EXISTS idx_sms_transfers_trx ON sms_transfers(trx_id);
+    CREATE INDEX IF NOT EXISTS idx_sms_transfers_status ON sms_transfers(status, received_at);
   `);
 
   if (!columnExists(db, "users", "language")) {

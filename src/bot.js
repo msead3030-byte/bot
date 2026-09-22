@@ -33,7 +33,8 @@ function formatMoney(piasters) {
 }
 
 function parseMoneyToPiasters(value) {
-  const raw = String(value || "").trim();
+  const converted = String(value || "").replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d));
+  const raw = converted.trim();
   if (!/^\d+(?:\.\d{1,2})?$/.test(raw)) throw new Error("⚠️ يرجى إرسال مبلغ صحيح، مثال: 50 أو 50.25");
   const [units, cents = ""] = raw.split(".");
   return Number(units) * 100 + Number(cents.padEnd(2, "0").slice(0, 2));
@@ -63,6 +64,14 @@ function manualPaymentMethods() {
 
 function topupsEnabled() {
   return isEnabled(process.env.MANUAL_TOPUPS_ENABLED) && manualPaymentMethods().length > 0;
+}
+
+function isAutoTopupEnabled() {
+  return isEnabled(process.env.AUTO_TOPUP_ENABLED ?? true);
+}
+
+function autoTopupReceiver() {
+  return String(process.env.AUTO_TOPUP_WALLET_RECEIVER || process.env.MANUAL_WALLET_RECEIVER || "01000000000").trim();
 }
 
 function isCommand(text, command) {
@@ -244,6 +253,7 @@ function adminKeyboard(isSuperAdmin = false, isMaintenance = false) {
     rows.push([{ text: "👥 الأعضاء", callback_data: "admin:members" }, { text: "🌐 تقرير المنصة الشامل", callback_data: "admin:report" }]);
     rows.push([{ text: "🏷️ تحديد سعر خاص لزبون", callback_data: "admin:custom_price" }]);
     rows.push([{ text: "📢 إرسال رسالة جماعية", callback_data: "admin:broadcast" }]);
+    rows.push([{ text: "📱 سجل رسائل التحويل SMS", callback_data: "admin:sms_transfers" }]);
     rows.push([{ text: isMaintenance ? "▶️ إيقاف وضع الصيانة (تفعيل البوت)" : "🛠️ تفعيل وضع الصيانة (إيقاف البوت)", callback_data: "admin:toggle_maintenance" }]);
   }
   rows.push([{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }]);
@@ -434,16 +444,25 @@ async function showContactAdmin(api, store, chatId, messageId = null) {
 
 async function showTopupMenu(api, store, chatId, userId, messageId = null) {
   const lang = store.getUserLanguage(userId);
-  const text = panel(t("btn_topup", lang), [t("topup_select_prompt", lang)]);
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: t("topup_wallet_btn", lang), callback_data: "topup_select:wallet" }],
-      [{ text: t("topup_binance_btn", lang), callback_data: "topup_select:binance" }],
-      [adminContactButton(t("btn_contact_admin_topup", lang))],
-      [{ text: t("btn_home", lang), callback_data: "main:home" }],
-    ],
-  };
-  await safeEditOrSend(api, chatId, messageId, text, { reply_markup: keyboard });
+  const text = panel(t("btn_topup", lang), [
+    "اختر طريقة شحن الرصيد المناسبة لك:",
+    "⚡ الشحن الفوري الآلي: تحويل إلى محفظة فودافون كاش / إنستاباي والتأكيد برقمك فوراً.",
+  ]);
+  const rows = [];
+  if (isAutoTopupEnabled() && autoTopupReceiver()) {
+    rows.push([{ text: "⚡ شحن فوري تلقائي (فودافون كاش / إنستاباي)", callback_data: "auto_topup:start" }]);
+  }
+  if (topupsEnabled()) {
+    rows.push([{ text: t("topup_wallet_btn", lang) + " (يدوي)", callback_data: "topup_select:wallet" }]);
+  }
+  const binanceReceiver = String(process.env.MANUAL_BINANCE_RECEIVER || "").trim();
+  if (binanceReceiver) {
+    rows.push([{ text: t("topup_binance_btn", lang), callback_data: "topup_select:binance" }]);
+  }
+  rows.push([adminContactButton(t("btn_contact_admin_topup", lang))]);
+  rows.push([{ text: t("btn_home", lang), callback_data: "main:home" }]);
+
+  await safeEditOrSend(api, chatId, messageId, text, { reply_markup: { inline_keyboard: rows } });
 }
 
 async function showAdmin(api, store, superAdmins, chatId, userId, messageId = null) {
@@ -601,6 +620,83 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
     store.clearState(userId);
     await startManualTopup(api, store, chatId, userId, state.data.paymentMethod, amount);
     return;
+  }
+
+  if (state.state === "auto_topup_amount") {
+    const amount = parseMoneyToPiasters(text);
+    store.clearState(userId);
+    const receiver = autoTopupReceiver();
+    const topup = store.createAutoTopup(userId, amount, "wallet", receiver);
+    const lines = [
+      `💵 المبلغ المطلوب تحويله بالضبط: ${formatMoney(topup.amount_piasters)}`,
+      `📱 رقم المحفظة / فودافون كاش: \`${receiver}\``,
+      "",
+      "📌 خطوات إتمام الشحن:",
+      "1. قم بتحويل المبلغ المحدد أعلاه بالضبط.",
+      "2. بعد التحويل، اضغط على زر [✅ تم التحويل - تأكيد بالرقم] بالأسفل.",
+      "3. سيطلب منك البوت رقم الهاتف الذي حوّلت منه للتحقق من رسالة الـ SMS وإضافة رصيدك فوراً.",
+    ];
+    await api.sendMessage(chatId, panel("⚡ شحن فوري عبر المحفظة", lines), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ تم التحويل - تأكيد بالرقم", callback_data: `auto_topup_confirm:${topup.id}` }],
+          [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (state.state === "auto_topup_sender_phone") {
+    const topupId = state.data.topupId;
+    const cleanSender = text.trim();
+    try {
+      const result = store.verifyAndClaimSmsTopup(userId, topupId, cleanSender);
+      if (result.ok) {
+        store.clearState(userId);
+        const lines = [
+          `💵 المبلغ المضاف: ${formatMoney(result.topup.amount_piasters)}`,
+          `📱 رقم المحول: ${result.transfer.sender_phone}`,
+          `🧾 كود العملية: ${result.transfer.trx_id.replace(/^[^_]+_/, "")}`,
+          `💰 رصيدك الحالي: ${formatMoney(result.balance)}`,
+        ];
+        await api.sendMessage(chatId, panel("🎉 تم شحن رصيدك بنجاح!", lines), {
+          reply_markup: homeKeyboard(false),
+        });
+        return;
+      }
+
+      // Not found yet
+      const lines = [
+        `المبلغ المطلوب: ${formatMoney(result.topup.amount_piasters)}`,
+        `الرقم المدخل: ${cleanSender}`,
+        "",
+        "⏳ لم يتم العثور على إشعار التحويل حتى الآن.",
+        "💡 إذا كنت قد حوّلت للتو، قد تستغرق شبكة فودافون/المحفظة من 30 إلى 60 ثانية لوصول إشعار الـ SMS.",
+        "يمكنك الانتظار ثوانٍ ثم الضغط على زر [🔄 إعادة الفحص الآن]، أو تأكد من إدخال الرقم الصحيح.",
+      ];
+      await api.sendMessage(chatId, panel("⏳ في انتظار إشعار التحويل", lines), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔄 إعادة الفحص الآن", callback_data: `auto_topup_retry:${topupId}` }],
+            [{ text: "✏️ تعديل رقم الهاتف المحول منه", callback_data: `auto_topup_confirm:${topupId}` }],
+            [{ text: "❌ إلغاء الطلب", callback_data: "flow:cancel" }],
+          ],
+        },
+      });
+      return;
+    } catch (err) {
+      await api.sendMessage(chatId, `⚠️ ${err.message}`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔄 إعادة المحاولة", callback_data: `auto_topup_confirm:${topupId}` }],
+            [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
+          ],
+        },
+      });
+      return;
+    }
   }
 
   if (state.state === "manual_topup_proof") {
@@ -1007,6 +1103,94 @@ async function handleCallback(api, store, superAdmins, query) {
 
   if (data === "main:topup") {
     await showTopupMenu(api, store, chatId, userId, messageId);
+    return;
+  }
+
+  if (data === "auto_topup:start") {
+    const receiver = autoTopupReceiver();
+    if (!receiver) {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ خدمة الشحن الآلي غير مهيأة حالياً (رقم الاستقبال غير محدد). يرجى التواصل مع الإدارة.", {
+        reply_markup: homeKeyboard(false),
+      });
+      return;
+    }
+    store.setState(userId, "auto_topup_amount", {});
+    await safeEditOrSend(api, chatId, messageId, "✏️ أرسل المبلغ الذي تريد شحنه بـ EGP (مثال: 50 أو 100):", {
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("auto_topup_confirm:")) {
+    const topupId = Number(data.split(":")[1]);
+    const topup = store.getTopup(topupId);
+    if (!topup || topup.user_id !== userId) {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ طلب الشحن غير موجود أو منتهي الصلاحية.", { reply_markup: homeKeyboard(false) });
+      return;
+    }
+    store.setState(userId, "auto_topup_sender_phone", { topupId });
+    await safeEditOrSend(api, chatId, messageId, "📱 أرسل الآن رقم المحفظة / الهاتف الذي قمت بالتحويل منه (مثال: 01012345678):", {
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("auto_topup_retry:")) {
+    const topupId = Number(data.split(":")[1]);
+    const topup = store.getTopup(topupId);
+    if (!topup || topup.user_id !== userId) {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ طلب الشحن غير موجود أو منتهي الصلاحية.", { reply_markup: homeKeyboard(false) });
+      return;
+    }
+    if (!topup.sender_identifier) {
+      store.setState(userId, "auto_topup_sender_phone", { topupId });
+      await safeEditOrSend(api, chatId, messageId, "📱 يرجى إرسال رقم الهاتف المحول منه أولاً:", {
+        reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
+      });
+      return;
+    }
+
+    try {
+      const result = store.verifyAndClaimSmsTopup(userId, topupId, topup.sender_identifier);
+      if (result.ok) {
+        store.clearState(userId);
+        const lines = [
+          `💵 المبلغ المضاف: ${formatMoney(result.topup.amount_piasters)}`,
+          `📱 رقم المحول: ${result.transfer.sender_phone}`,
+          `🧾 كود العملية: ${result.transfer.trx_id.replace(/^[^_]+_/, "")}`,
+          `💰 رصيدك الحالي: ${formatMoney(result.balance)}`,
+        ];
+        await safeEditOrSend(api, chatId, messageId, panel("🎉 تم شحن رصيدك بنجاح!", lines), {
+          reply_markup: homeKeyboard(false),
+        });
+        return;
+      }
+
+      await api.answerCallbackQuery(query.id, {
+        text: "⏳ لم تصل رسالة التحويل بعد. انتظر ثوانٍ وجرب مرة أخرى.",
+        show_alert: true,
+      }).catch(() => { });
+    } catch (err) {
+      await api.answerCallbackQuery(query.id, {
+        text: `⚠️ ${err.message}`,
+        show_alert: true,
+      }).catch(() => { });
+    }
+    return;
+  }
+
+  if (data === "admin:sms_transfers") {
+    if (!stf.isSuperAdmin) return;
+    const transfers = store.listRecentSmsTransfers(15);
+    const lines = transfers.length ? [] : ["لا توجد رسائل تحويل مستلمة حتى الآن."];
+    for (const t of transfers) {
+      const statusIcon = t.status === "claimed" ? "✅ مستخدم" : "⏳ غير مستخدم";
+      const userTag = t.claimed_by_user_id ? ` (العميل: ${t.claimed_by_user_id})` : "";
+      lines.push(`${statusIcon} ${formatMoney(t.amount_piasters)} • من ${t.sender_phone} • كود: ${t.trx_id.replace(/^[^_]+_/, "")}${userTag}`);
+    }
+    await safeEditOrSend(api, chatId, messageId, panel("📱 آخر رسائل التحويلات المستلمة", lines), {
+      reply_markup: adminKeyboard(true, store.getMaintenanceMode()),
+    });
     return;
   }
 

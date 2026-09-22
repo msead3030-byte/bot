@@ -8,6 +8,7 @@ const { CashupClient } = require("../src/CashupClient");
 const { SecretBox } = require("../src/SecretBox");
 const { openStoreDatabase } = require("../src/StoreDatabase");
 const { StoreService } = require("../src/StoreService");
+const { SmsWebhookServer } = require("../src/SmsWebhookServer");
 const { poll } = require("../src/bot");
 
 function idSet(value) {
@@ -53,6 +54,29 @@ function main() {
   bootstrapSuperAdmins(store, superAdmins);
 
   const api = new TelegramApi(token);
+
+  const autoTopupEnabled = !/^(0|false|no|off)$/i.test(String(process.env.AUTO_TOPUP_ENABLED ?? "true"));
+  let smsServer = null;
+  if (autoTopupEnabled) {
+    smsServer = new SmsWebhookServer({
+      store,
+      api,
+      port: process.env.SMS_WEBHOOK_PORT || 3000,
+      secret: process.env.SMS_WEBHOOK_SECRET || "",
+    });
+    smsServer.start().catch((err) => {
+      console.warn("[warn] SMS Webhook server failed to start:", err.message);
+    });
+  }
+
+  const cleanup = () => {
+    if (smsServer) {
+      try { smsServer.stop(); } catch { }
+    }
+  };
+  process.on("SIGINT", cleanup);
+  process.on("SIGTERM", cleanup);
+
   poll(api, store, superAdmins);
 }
 
