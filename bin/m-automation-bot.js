@@ -61,7 +61,7 @@ function main() {
     smsServer = new SmsWebhookServer({
       store,
       api,
-      port: process.env.SMS_WEBHOOK_PORT || 3000,
+      port: process.env.PORT || process.env.SMS_WEBHOOK_PORT || 3000,
       secret: process.env.SMS_WEBHOOK_SECRET || "",
     });
     smsServer.start().catch((err) => {
