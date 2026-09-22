@@ -210,17 +210,39 @@ function replyMenuKeyboard(isStaff = false, lang = "ar") {
 }
 
 function homeKeyboard(isStaff = false, lang = "ar") {
+  const isAr = lang === "ar";
   return {
     inline_keyboard: [
       [
-        { text: t("btn_home", lang), callback_data: "main:home" },
-        { text: t("btn_topup", lang), callback_data: "main:topup" },
+        { text: isAr ? "🛒 تصفح المنتجات" : "🛒 Browse Store", callback_data: "main:shop" },
+        { text: isAr ? "⚡ شحن الرصيد الفوري" : "⚡ Instant Top-up", callback_data: "main:topup" },
       ],
       [
-        adminContactButton(t("btn_contact_admin", lang)),
-        { text: t("btn_language", lang), callback_data: "main:language" },
+        { text: isAr ? "💰 محفظتي" : "💰 My Wallet", callback_data: "main:balance" },
+        { text: isAr ? "📦 سجل طلباتي" : "📦 My Orders", callback_data: "main:orders" },
       ],
-      ...(isStaff ? [[{ text: t("btn_admin_panel", lang), callback_data: "main:admin" }]] : []),
+      [
+        { text: isAr ? "🔍 بحث عن منتج" : "🔍 Search Product", callback_data: "main:search" },
+        { text: isAr ? "👤 حسابي" : "👤 My Account", callback_data: "main:account" },
+      ],
+      [
+        adminContactButton(isAr ? "💬 الدعم الفني" : "💬 Support"),
+        { text: isAr ? "🌐 اللغة / Language" : "🌐 Language / اللغة", callback_data: "main:language" },
+      ],
+      ...(isStaff ? [[{ text: isAr ? "⚙️ لوحة الإدارة والتحكم" : "⚙️ Admin Control Panel", callback_data: "main:admin" }]] : []),
+    ],
+  };
+}
+
+function subNavKeyboard(lang = "ar", extraRows = []) {
+  const isAr = lang === "ar";
+  return {
+    inline_keyboard: [
+      ...extraRows,
+      [
+        { text: isAr ? "⚡ شحن الرصيد" : "⚡ Top-up", callback_data: "main:topup" },
+        { text: isAr ? "🏠 القائمة الرئيسية" : "🏠 Main Menu", callback_data: "main:home" },
+      ],
     ],
   };
 }
@@ -321,15 +343,46 @@ function topupKeyboard() {
   };
 }
 
-function homeText(store, userId) {
+function homeText(store, userId, from = {}) {
   const lang = store.getUserLanguage(userId);
-  return panel(`متجر ${brandName()}`, [
-    t("welcome_home", lang),
+  const user = store.getUser(userId) || from;
+  const name = displayName(user);
+  const balance = formatMoney(store.balance(userId));
+  const brand = brandName();
+
+  if (lang === "en") {
+    return [
+      "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
+      `🌩️  ${brand.toUpperCase()}  🌩️`,
+      "⚡ High-Speed Digital Store Experience ⚡",
+      "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
+      "",
+      `👤 Customer: **${escMd(name)}** \`(${userId})\``,
+      `💰 Wallet Balance: **${balance}** ⚡`,
+      "🟢 System Status: **Online & Ready 24/7** 🚀",
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+      "🛍️ Instant Delivery Digital Cards & Game Accounts",
+      "⚡ Automatic Instant Top-up via Vodafone Cash & InstaPay!",
+      "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+      "👇 Choose an option from below to get started:",
+    ].join("\n");
+  }
+
+  return [
+    "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
+    `🌩️  صـاعـقـة الـمـتـجـر الـرقـمـي  🌩️`,
+    `⚡ مرحباً بك في متجر ${brand} الرسمي ⚡`,
+    "⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡⚡",
     "",
-    t("balance_text", lang, { balance: formatMoney(store.balance(userId)) }),
-    "",
-    t("home_instructions", lang),
-  ]);
+    `👤 العميل: **${escMd(name)}** \`(${userId})\``,
+    `💰 رصيدك الحالي: **${balance}** ⚡`,
+    "🟢 حالة النظام: **متصل وجاهز للخدمة الفورية 24/7** 🚀",
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "🛍️ تسليم فوري وتلقائي لكروت وشحنات الألعاب والاشتراكات",
+    "⚡ شحن رصيدك آلياً في ثوانٍ عبر فودافون كاش وإنستاباي!",
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    "👇 اختر من القائمة للانطلاق:",
+  ].join("\n");
 }
 
 function productText(store, userId, product) {
@@ -368,14 +421,32 @@ async function showHome(api, store, superAdmins, chatId, from, messageId = null)
   const id = store.ensureUser(from);
   const stf = staffStatus(store, superAdmins, id);
   const lang = store.getUserLanguage(id);
+  const inlineKbd = homeKeyboard(stf.isSuperAdmin || stf.isMerchant, lang);
 
-  // إرسال كيبورد القائمة الثابتة دائماً
-  await api.sendMessage(chatId, "👇", {
-    reply_markup: replyMenuKeyboard(stf.isSuperAdmin || stf.isMerchant, lang),
-  }).catch(() => { });
+  if (messageId) {
+    return safeEditOrSend(api, chatId, messageId, homeText(store, id, from), {
+      parse_mode: "Markdown",
+      reply_markup: inlineKbd,
+    });
+  }
 
-  await safeEditOrSend(api, chatId, messageId, homeText(store, id), {
-    reply_markup: homeKeyboard(stf.isSuperAdmin || stf.isMerchant, lang),
+  // When /start or new text command: Electric thunderstrike opening!
+  try {
+    const flashMsg = await api.sendMessage(chatId, "⚡⚡⚡ جاري تفريغ صاعقة المتجر... 🌩️⚡", {
+      reply_markup: replyMenuKeyboard(stf.isSuperAdmin || stf.isMerchant, lang),
+    });
+    if (flashMsg && flashMsg.message_id) {
+      await sleep(250);
+      return await api.editMessageText(chatId, flashMsg.message_id, homeText(store, id, from), {
+        parse_mode: "Markdown",
+        reply_markup: inlineKbd,
+      });
+    }
+  } catch { }
+
+  return api.sendMessage(chatId, homeText(store, id, from), {
+    parse_mode: "Markdown",
+    reply_markup: inlineKbd,
   });
 }
 
@@ -391,6 +462,7 @@ async function showShop(api, store, chatId, messageId = null) {
 }
 
 async function showBalance(api, store, chatId, userId, messageId = null) {
+  const lang = store.getUserLanguage(userId);
   const entries = store.ledger(userId, 10);
   const lines = [`💰 رصيدك الحالي: ${formatMoney(store.balance(userId))}`];
   if (entries.length) {
@@ -400,20 +472,22 @@ async function showBalance(api, store, chatId, userId, messageId = null) {
       lines.push(`${sign} ${formatMoney(Math.abs(entry.amount_piasters))} • ${entry.note || entry.type}`);
     }
   }
-  await safeEditOrSend(api, chatId, messageId, panel("💰 محفظتي والحساب", lines), { reply_markup: homeKeyboard(false) });
+  await safeEditOrSend(api, chatId, messageId, panel("💰 محفظتي والحساب", lines), { reply_markup: subNavKeyboard(lang) });
 }
 
 async function showOrders(api, store, chatId, userId, messageId = null) {
+  const lang = store.getUserLanguage(userId);
   const orders = store.listUserPurchaseHistory(userId, 15);
   const lines = orders.length ? [] : ["لا توجد لديك طلبات قائمة أو سابقة حتى الآن."];
   for (const order of orders) {
     const statusBadge = order.status === "completed" ? "✅ مكتمل" : order.status === "awaiting_delivery" ? "⏳ قيد التسليم" : `• ${order.status}`;
     lines.push(`#${order.id} • ${order.product_title || "منتج"} • ${formatMoney(order.total_piasters)} • ${statusBadge}`);
   }
-  await safeEditOrSend(api, chatId, messageId, panel("📦 سجل طلباتي ومشترياتي", lines), { reply_markup: homeKeyboard(false) });
+  await safeEditOrSend(api, chatId, messageId, panel("📦 سجل طلباتي ومشترياتي", lines), { reply_markup: subNavKeyboard(lang) });
 }
 
 async function showAccount(api, store, chatId, userId, from = {}, messageId = null) {
+  const lang = store.getUserLanguage(userId);
   const user = store.getUser(userId) || from;
   const balance = store.balance(userId);
   const ordersCount = store.listUserPurchaseHistory(userId, 100).length;
@@ -423,7 +497,7 @@ async function showAccount(api, store, chatId, userId, from = {}, messageId = nu
     `💰 الرصيد الحالي: ${escMd(formatMoney(balance))}`,
     `📦 إجمالي الطلبات: ${ordersCount} طلب`,
   ];
-  await safeEditOrSend(api, chatId, messageId, panel("👤 بيانات حسابي", lines), { parse_mode: "Markdown", reply_markup: homeKeyboard(false) });
+  await safeEditOrSend(api, chatId, messageId, panel("👤 بيانات حسابي", lines), { parse_mode: "Markdown", reply_markup: subNavKeyboard(lang) });
 }
 
 async function showContactAdmin(api, store, chatId, messageId = null) {
@@ -655,10 +729,12 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       const result = store.verifyAndClaimSmsTopup(userId, topupId, cleanSender);
       if (result.ok) {
         store.clearState(userId);
+        const senderPhone = result.transfer?.sender_phone || cleanSender;
+        const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
         const lines = [
           `💵 المبلغ المضاف: ${formatMoney(result.topup.amount_piasters)}`,
-          `📱 رقم المحول: ${result.transfer.sender_phone}`,
-          `🧾 كود العملية: ${result.transfer.trx_id.replace(/^[^_]+_/, "")}`,
+          `📱 رقم المحول: ${senderPhone}`,
+          `🧾 كود العملية: ${trxId}`,
           `💰 رصيدك الحالي: ${formatMoney(result.balance)}`,
         ];
         await api.sendMessage(chatId, panel("🎉 تم شحن رصيدك بنجاح!", lines), {
@@ -1099,6 +1175,14 @@ async function handleCallback(api, store, superAdmins, query) {
   if (data === "main:shop") { await showShop(api, store, chatId, messageId); return; }
   if (data === "main:balance") { await showBalance(api, store, chatId, userId, messageId); return; }
   if (data === "main:orders") { await showOrders(api, store, chatId, userId, messageId); return; }
+  if (data === "main:account") { await showAccount(api, store, chatId, userId, from, messageId); return; }
+  if (data === "main:search") {
+    store.setState(userId, "search_query", {});
+    await safeEditOrSend(api, chatId, messageId, "🔍 أرسل اسم المنتج الذي تبحث عنه:", {
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] }
+    });
+    return;
+  }
   if (data === "main:admin") { await showAdmin(api, store, superAdmins, chatId, userId, messageId); return; }
 
   if (data === "main:topup") {
@@ -1154,10 +1238,12 @@ async function handleCallback(api, store, superAdmins, query) {
       const result = store.verifyAndClaimSmsTopup(userId, topupId, topup.sender_identifier);
       if (result.ok) {
         store.clearState(userId);
+        const senderPhone = result.transfer?.sender_phone || topup.sender_identifier;
+        const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
         const lines = [
           `💵 المبلغ المضاف: ${formatMoney(result.topup.amount_piasters)}`,
-          `📱 رقم المحول: ${result.transfer.sender_phone}`,
-          `🧾 كود العملية: ${result.transfer.trx_id.replace(/^[^_]+_/, "")}`,
+          `📱 رقم المحول: ${senderPhone}`,
+          `🧾 كود العملية: ${trxId}`,
           `💰 رصيدك الحالي: ${formatMoney(result.balance)}`,
         ];
         await safeEditOrSend(api, chatId, messageId, panel("🎉 تم شحن رصيدك بنجاح!", lines), {

@@ -1,14 +1,51 @@
 "use strict";
 
 const http = require("http");
+const crypto = require("crypto");
 const { parseSms, normalizePhoneNumber } = require("./SmsParser");
+
+// In-memory rate limiter per IP (max 60 requests per minute)
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 60;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, item] of rateLimitMap.entries()) {
+    if (now - item.start > RATE_LIMIT_WINDOW_MS) {
+      rateLimitMap.delete(ip);
+    }
+  }
+}, 5 * 60 * 1000).unref();
+
+function isRateLimited(ip) {
+  const now = Date.now();
+  let record = rateLimitMap.get(ip);
+  if (!record || now - record.start > RATE_LIMIT_WINDOW_MS) {
+    rateLimitMap.set(ip, { start: now, count: 1 });
+    return false;
+  }
+  record.count += 1;
+  return record.count > RATE_LIMIT_MAX;
+}
+
+function safeTimingCompare(a, b) {
+  if (typeof a !== "string" || typeof b !== "string") return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) {
+    crypto.timingSafeEqual(bufA, bufA);
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
 
 function parseBody(req) {
   return new Promise((resolve) => {
     let raw = "";
     req.on("data", (chunk) => {
       raw += chunk;
-      // Protect against gigantic payloads
+      // Protect against gigantic payloads (max 1MB)
       if (raw.length > 1e6) {
         req.destroy();
         resolve({});
@@ -52,7 +89,7 @@ class SmsWebhookServer {
   constructor({ store, api, port = 3000, secret = "" }) {
     this.store = store;
     this.api = api;
-    this.port = Number(process.env.SMS_WEBHOOK_PORT || port || 3000);
+    this.port = Number(process.env.PORT || process.env.SMS_WEBHOOK_PORT || port || 3000);
     this.secret = String(process.env.SMS_WEBHOOK_SECRET || secret || "").trim();
     this.server = null;
   }
@@ -78,6 +115,9 @@ class SmsWebhookServer {
 
       this.server.listen(this.port, () => {
         console.log(`[SMS Webhook] Server listening on port ${this.port}`);
+        if (!this.secret) {
+          console.warn("[SECURITY WARN] SMS_WEBHOOK_SECRET is empty. Set SMS_WEBHOOK_SECRET in .env for protected production hosting.");
+        }
         resolve(this.server);
       });
     });
@@ -91,6 +131,12 @@ class SmsWebhookServer {
   }
 
   async handleRequest(req, res) {
+    const clientIp = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket.remoteAddress || "unknown";
+    if (isRateLimited(clientIp)) {
+      sendJson(res, 429, { ok: false, error: "Too many requests. Please slow down." });
+      return;
+    }
+
     const url = new URL(req.url, `http://localhost:${this.port}`);
     const method = req.method.toUpperCase();
 
@@ -125,14 +171,16 @@ class SmsWebhookServer {
 
       const body = await parseBody(req);
 
-      // Authenticate secret token
+      // Authenticate secret token using timing-safe comparison
       const authHeader = req.headers["x-webhook-secret"] || req.headers["authorization"] || "";
       const cleanHeader = authHeader.replace(/^Bearer\s+/i, "").trim();
       const token = cleanHeader || url.searchParams.get("secret") || body.secret || "";
 
-      if (this.secret && token !== this.secret) {
-        sendJson(res, 401, { ok: false, error: "Unauthorized. Invalid or missing secret token." });
-        return;
+      if (this.secret) {
+        if (!token || !safeTimingCompare(token, this.secret)) {
+          sendJson(res, 401, { ok: false, error: "Unauthorized. Invalid or missing secret token." });
+          return;
+        }
       }
 
       // Extract message text from common forwarder body keys
