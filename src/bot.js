@@ -4,7 +4,9 @@ const fs = require("fs");
 const path = require("path");
 const { sleep } = require("./TelegramApi");
 const { t } = require("./i18n");
+const { BinancePayClient } = require("./BinancePayClient");
 
+const binancePayClient = new BinancePayClient();
 const BANNER_PATH = path.join(__dirname, "..", "assets", "store_banner.jpg");
 
 const log = {
@@ -19,7 +21,19 @@ const log = {
 };
 
 function brandName() {
-  return String(process.env.STORE_BRAND_NAME || "Mohamed Payment Store").trim();
+  return String(process.env.STORE_BRAND_NAME || "AI Studio").trim();
+}
+
+function formatDateTime(isoString) {
+  if (!isoString) return "";
+  try {
+    const d = new Date(isoString);
+    const date = d.toLocaleDateString("ar-EG", { year: "numeric", month: "short", day: "numeric" });
+    const time = d.toLocaleTimeString("ar-EG", { hour: "2-digit", minute: "2-digit" });
+    return `${date} - ${time}`;
+  } catch {
+    return String(isoString).slice(0, 16);
+  }
 }
 
 function currencyCode() {
@@ -202,14 +216,12 @@ async function sendMandatoryJoinPrompt(api, store, chatId, userId, messageId = n
 function replyMenuKeyboard(isStaff = false, lang = "ar") {
   const keyboard = [
     [{ text: t("btn_products", lang) }, { text: t("btn_wallet", lang) }],
-    [{ text: t("btn_orders", lang) }, { text: t("btn_search", lang) }],
-    [{ text: t("btn_topup", lang) }, { text: t("btn_contact_admin", lang) }, { text: t("btn_account", lang) }],
-    [{ text: t("btn_language", lang) }],
+    [{ text: t("btn_language", lang) }, { text: t("btn_more", lang) }],
   ];
   if (isStaff) {
     keyboard.push([{ text: t("btn_admin_panel", lang) }]);
   }
-  return { keyboard: keyboard, resize_keyboard: true };
+  return { keyboard, resize_keyboard: true };
 }
 
 function homeKeyboard(isStaff = false, lang = "ar") {
@@ -217,24 +229,14 @@ function homeKeyboard(isStaff = false, lang = "ar") {
   return {
     inline_keyboard: [
       [
-        { text: isAr ? "⚡ شـحـن رصـيـد صـاعـق (فـوري)" : "⚡ Instant Cyber Top-up", callback_data: "main:topup" },
+        { text: isAr ? "🛒 تصفح المنتجات" : "🛒 Browse Products", callback_data: "main:shop" },
+        { text: isAr ? "💼 المحفظة" : "💼 Wallet", callback_data: "main:wallet" },
       ],
       [
-        { text: isAr ? "🎮 تصفح المتجر الرقمي" : "🎮 Browse Store", callback_data: "main:shop" },
-        { text: isAr ? "🔍 بحث سريع" : "🔍 Search Depot", callback_data: "main:search" },
+        { text: isAr ? "🌐 اللغة" : "🌐 Language", callback_data: "main:language" },
+        { text: isAr ? "➕ المزيد" : "➕ More", callback_data: "main:more" },
       ],
-      [
-        { text: isAr ? "💼 محفظتي وكشف الحساب" : "💼 Cyber Wallet", callback_data: "main:balance" },
-        { text: isAr ? "📋 سجل مشترياتي" : "📋 Order Logs", callback_data: "main:orders" },
-      ],
-      [
-        { text: isAr ? "👤 الملف الشخصي" : "👤 User Profile", callback_data: "main:account" },
-        adminContactButton(isAr ? "💬 الدعم السيبراني" : "💬 Support Hub"),
-      ],
-      [
-        { text: isAr ? "🌐 اللغة ╏ Language" : "🌐 Language ╏ اللغة", callback_data: "main:language" },
-      ],
-      ...(isStaff ? [[{ text: isAr ? "⚙️ لوحة الإدارة والتحكم السيبرانية" : "⚙️ Cyber Admin Terminal", callback_data: "main:admin" }]] : []),
+      ...(isStaff ? [[{ text: isAr ? "⚙️ لوحة الإدارة والتحكم" : "⚙️ Admin Terminal", callback_data: "main:admin" }]] : []),
     ],
   };
 }
@@ -373,41 +375,41 @@ function homeText(store, userId, from = {}) {
   if (lang === "en") {
     return [
       `╔══════════════════════════════╗`,
-      `  ⚡  ${brand}  ⚡`,
-      `  [ CYBERNETIC DIGITAL TERMINAL ]`,
+      `      ⚡ AI STUDIO STORE ⚡`,
+      `   Digital Subscriptions Store`,
       `╚══════════════════════════════╝`,
       "",
       `◈ Customer ╏ **${escMd(name)}**`,
       `◈ User ID  ╏ \`${userId}\``,
       `◈ Balance  ╏ **${balance}** ⚡`,
-      `◈ Server   ╏ 🟢 [ONLINE: 24/7 ULTRA-FAST]`,
+      `◈ Status   ╏ 🟢 [ACTIVE & READY]`,
       "",
-      `╭─[ ⚡ INSTANT AUTO TOP-UP ]──────────`,
-      `│ Vodafone Cash & InstaPay credited in seconds!`,
+      `╭─[ ⚡ INSTANT DIGITAL TOP-UP ]────────`,
+      `│ E-Wallets • InstaPay • Binance Pay`,
       `╰─────────────────────────────────`,
       "",
-      `🕹️ Instant delivery gaming cards, keys & subscriptions.`,
-      `👇 Select an action from the cyber console below:`,
+      `🤖 AI tools, digital subscriptions & accounts with instant delivery.`,
+      `👇 Select an option from the menu below:`,
     ].join("\n");
   }
 
   return [
     `╔══════════════════════════════╗`,
-    `  ⚡ صـاعـقـة الـمـتـجـر الـسـيـبـرانـي ⚡`,
-    `  [ ${brand} • DIGITAL HUB ]`,
+    `      ⚡ AI STUDIO STORE ⚡`,
+    `  متجر الاشتراكات والخدمات الرقمية`,
     `╚══════════════════════════════╝`,
     "",
     `◈ المـسـتـخـدم ╏ **${escMd(name)}**`,
     `◈ مـعـرّف الـحـسـاب ╏ \`${userId}\``,
     `◈ رصـيـد الـمـحـفـظـة ╏ **${balance}** ⚡`,
-    `◈ حـالـة الـنـظـام ╏ 🟢 [مـتـصـل ونـشـط 24/7]`,
+    `◈ حـالـة الـحـسـاب ╏ 🟢 [مـفـعـل وجـاهـز لـلـشـراء]`,
     "",
-    `╭─[ ⚡ شـحـن صـاعـق فـوري وذاتـي ]───────`,
-    `│ فودافون كاش & إنستاباي - الرصيد ينزل بالثواني!`,
+    `╭─[ ⚡ شـحـن فـوري وتـلـقـائـي ]───────`,
+    `│ فودافون كاش • إنستاباي • Binance Pay`,
     `╰─────────────────────────────────`,
     "",
-    `🎮 كروت ألعاب، اشتراكات رقمية، وتسليم فوري لا يتوقف.`,
-    `👇 اختر وجهتك من لوحة التحكم السيبرانية أدناه:`,
+    `🤖 اشتراكات رقمية، حسابات، وأدوات تقنية ذكية بتسليم فوري.`,
+    `👇 اختر وجهتك من القائمة أدناه:`,
   ].join("\n");
 }
 
@@ -509,32 +511,123 @@ async function showShop(api, store, chatId, messageId = null) {
   await safeEditOrSend(api, chatId, messageId, text, { parse_mode: "Markdown", reply_markup: productListKeyboard(products) });
 }
 
-async function showBalance(api, store, chatId, userId, messageId = null) {
+async function showWallet(api, store, chatId, userId, messageId = null) {
   const lang = store.getUserLanguage(userId);
-  const entries = store.ledger(userId, 10);
+  const isAr = lang === "ar";
+  const balance = store.balance(userId);
   const lines = [
     `╔══════════════════════════════╗`,
-    `  💼 الـمـحـفـظـة الـسـيـبـرانـيـة ⚡`,
+    `  💼 مـحـفـظـة AI Studio الـرقـمـيـة`,
     `╚══════════════════════════════╝`,
     "",
-    `◈ رصـيـدك الـحـالـي ╏ **${formatMoney(store.balance(userId))}**`,
-    `◈ حـالـة الـحـسـاب ╏ 🟢 [مـفـعـل وجـاهـز لـلـشـراء]`,
+    `◈ رصـيـدك الـحـالـي ╏ **${formatMoney(balance)}** ⚡`,
+    `◈ حـالـة الـمـحـفـظـة ╏ 🟢 [مـفـعـلـة وجـاهـزة لـلـشـراء]`,
+    "",
+    isAr
+      ? "💡 يمكنك شحن رصيدك عبر المحافظ أو إنستاباي أو باينانس، أو الاطلاع على كشف الحساب بالتفصيل:"
+      : "💡 You can add balance via E-Wallet, InstaPay, or Binance Pay, or view your balance statement:",
   ];
-  if (entries.length) {
-    lines.push("", "╭─[ 📜 كـشـف آخـر الـحـركـات الـمـالـيـة ]───────");
-    for (const entry of entries) {
-      const sign = entry.amount_piasters >= 0 ? "➕" : "➖";
-      lines.push(`│ ${sign} ${formatMoney(Math.abs(entry.amount_piasters))} • ${entry.note || entry.type}`);
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: isAr ? "⚡ إضافة رصيد (شحن)" : "⚡ Add Balance", callback_data: "main:topup" }],
+      [{ text: isAr ? "📜 كشف حساب الرصيد" : "📜 Balance Statement", callback_data: "main:statement" }],
+      [{ text: isAr ? "🏠 القائمة الرئيسية" : "🏠 Main Menu", callback_data: "main:home" }],
+    ],
+  };
+
+  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), {
+    parse_mode: "Markdown",
+    reply_markup: keyboard,
+  });
+}
+
+const showBalance = showWallet;
+
+async function showMoreMenu(api, store, chatId, userId, messageId = null) {
+  const lang = store.getUserLanguage(userId);
+  const isAr = lang === "ar";
+  const lines = [
+    `╔══════════════════════════════╗`,
+    `     ➕ الـخـدمـات والـمـزيـد`,
+    `╚══════════════════════════════╝`,
+    "",
+    isAr ? "👇 اختر من القائمة التالية للوصول للخدمات الإضافية:" : "👇 Select a service from the options below:",
+  ];
+
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: isAr ? "👤 الملف الشخصي" : "👤 Profile", callback_data: "main:account" },
+        adminContactButton(isAr ? "💬 الدعم الفني" : "💬 Support"),
+      ],
+      [
+        { text: isAr ? "📋 سجل المشتريات" : "📋 Purchase History", callback_data: "main:orders" },
+        { text: isAr ? "📜 كشف الحساب" : "📜 Statement", callback_data: "main:statement" },
+      ],
+      [
+        { text: isAr ? "🔍 البحث عن اشتراك" : "🔍 Search", callback_data: "main:search" },
+      ],
+      [
+        { text: isAr ? "🏠 القائمة الرئيسية" : "🏠 Main Menu", callback_data: "main:home" },
+      ],
+    ],
+  };
+
+  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), {
+    parse_mode: "Markdown",
+    reply_markup: keyboard,
+  });
+}
+
+async function showStatement(api, store, chatId, userId, messageId = null) {
+  const lang = store.getUserLanguage(userId);
+  const isAr = lang === "ar";
+  const deposits = store.userDepositLedger(userId, 15);
+  const balance = store.balance(userId);
+
+  const lines = [
+    `╔══════════════════════════════╗`,
+    `  📜 كـشـف حـسـاب الـرصـيـد والـشـحـن`,
+    `╚══════════════════════════════╝`,
+    "",
+    `◈ رصـيـدك الـحـالـي ╏ **${formatMoney(balance)}** ⚡`,
+    "",
+    isAr ? "╭─[ 💰 سـجـل كـل رصـيـد أُضـيـف لـحـسـابـك ]───────" : "╭─[ 💰 DEPOSIT HISTORY ]───────────",
+  ];
+
+  if (deposits.length) {
+    for (const d of deposits) {
+      const dateStr = formatDateTime(d.created_at);
+      const noteStr = d.note || "شحن رصيد";
+      lines.push(`│ ➕ **${formatMoney(d.amount_piasters)}**`);
+      lines.push(`│   📅 التاريخ: ${dateStr}`);
+      lines.push(`│   📝 التفاصيل: ${noteStr}`);
+      lines.push("├─────────────────────────────────");
     }
-    lines.push("╰─────────────────────────────────");
+    lines[lines.length - 1] = "╰─────────────────────────────────";
   } else {
-    lines.push("", "💡 لا توجد حركات مالية سابقة في محفظتك حتى الآن.");
+    lines.push(isAr ? "│ 💡 لا توجد عمليات شحن رصيد مسجلة حتى الآن." : "│ 💡 No deposit records found yet.");
+    lines.push("╰─────────────────────────────────");
   }
-  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), { parse_mode: "Markdown", reply_markup: subNavKeyboard(lang) });
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: isAr ? "⚡ إضافة رصيد" : "⚡ Add Balance", callback_data: "main:topup" }],
+      [{ text: isAr ? "💼 المحفظة" : "💼 Wallet", callback_data: "main:wallet" }, { text: isAr ? "➕ المزيد" : "➕ More", callback_data: "main:more" }],
+      [{ text: isAr ? "🏠 الرئيسية" : "🏠 Home", callback_data: "main:home" }],
+    ],
+  };
+
+  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), {
+    parse_mode: "Markdown",
+    reply_markup: keyboard,
+  });
 }
 
 async function showOrders(api, store, chatId, userId, messageId = null) {
   const lang = store.getUserLanguage(userId);
+  const isAr = lang === "ar";
   const orders = store.listUserPurchaseHistory(userId, 15);
   const lines = [
     `╔══════════════════════════════╗`,
@@ -542,34 +635,67 @@ async function showOrders(api, store, chatId, userId, messageId = null) {
     `╚══════════════════════════════╝`,
     "",
   ];
+
   if (orders.length) {
     for (const order of orders) {
       const statusBadge = order.status === "completed" ? "🟢 مكتمل" : order.status === "awaiting_delivery" ? "⏳ قيد التنفيذ" : `⚪ ${order.status}`;
-      lines.push(`◈ **#${order.id}** ╏ ${order.product_title || "منتج"} • ${formatMoney(order.total_piasters)} • ${statusBadge}`);
+      const dateStr = formatDateTime(order.created_at);
+      lines.push(`◈ **طلب #${order.id}** ╏ ${order.product_title || "اشتراك رقمي"}`);
+      lines.push(`   💵 القيمة: **${formatMoney(order.total_piasters)}**`);
+      lines.push(`   📅 التاريخ: ${dateStr}`);
+      lines.push(`   📊 الحالة: ${statusBadge}`);
+      lines.push("───────────────────────────────");
     }
   } else {
-    lines.push("💡 لا توجد لديك طلبات قائمة أو سابقة في سجلك حتى الآن.");
+    lines.push(isAr ? "💡 لا توجد لديك طلبات أو مشتريات سابقة حتى الآن." : "💡 You have no purchase history yet.");
   }
-  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), { parse_mode: "Markdown", reply_markup: subNavKeyboard(lang) });
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: isAr ? "🛒 تصفح المنتجات" : "🛒 Browse Products", callback_data: "main:shop" }],
+      [{ text: isAr ? "➕ المزيد" : "➕ More", callback_data: "main:more" }, { text: isAr ? "🏠 الرئيسية" : "🏠 Home", callback_data: "main:home" }],
+    ],
+  };
+
+  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), {
+    parse_mode: "Markdown",
+    reply_markup: keyboard,
+  });
 }
 
 async function showAccount(api, store, chatId, userId, from = {}, messageId = null) {
   const lang = store.getUserLanguage(userId);
+  const isAr = lang === "ar";
   const user = store.getUser(userId) || from;
   const balance = store.balance(userId);
   const ordersCount = store.listUserPurchaseHistory(userId, 100).length;
+  const joinDate = user.created_at ? formatDateTime(user.created_at) : "غير محدد";
+
   const lines = [
     `╔══════════════════════════════╗`,
-    `  👤 مـلـف الـعـمـيـل الـرقـمـي`,
+    `  👤 مـلـف الـعـمـيـل الـشـخـصـي`,
     `╚══════════════════════════════╝`,
     "",
     `◈ الاسـم ╏ **${escMd(displayName(user))}**`,
-    `◈ الـمـعـرّف ╏ \`${userId}\``,
-    `◈ الـرصـيـد ╏ **${escMd(formatMoney(balance))}** ⚡`,
-    `◈ إجـمـالـي الـطـلـبـات ╏ **${ordersCount}** طلب`,
-    `◈ الـرتـبـة ╏ 🎖️ [VIP Member]`,
+    `◈ المـعـرّف (ID) ╏ \`${userId}\``,
+    `◈ رصـيـد الـمـحـفـظـة ╏ **${escMd(formatMoney(balance))}** ⚡`,
+    `◈ إجـمـالـي الـمـشـتـريـات ╏ **${ordersCount}** طلب`,
+    `◈ تـاريـخ الانـضـمـام ╏ ${joinDate}`,
+    `◈ الـعـضـويـة ╏ 🎖️ [VIP Customer]`,
   ];
-  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), { parse_mode: "Markdown", reply_markup: subNavKeyboard(lang) });
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: isAr ? "⚡ إضافة رصيد" : "⚡ Add Balance", callback_data: "main:topup" }],
+      [{ text: isAr ? "📋 مشترياتي" : "📋 My Orders", callback_data: "main:orders" }, { text: isAr ? "📜 كشف الحساب" : "📜 Statement", callback_data: "main:statement" }],
+      [{ text: isAr ? "➕ المزيد" : "➕ More", callback_data: "main:more" }, { text: isAr ? "🏠 الرئيسية" : "🏠 Home", callback_data: "main:home" }],
+    ],
+  };
+
+  await safeEditOrSend(api, chatId, messageId, lines.join("\n"), {
+    parse_mode: "Markdown",
+    reply_markup: keyboard,
+  });
 }
 
 async function showContactAdmin(api, store, chatId, messageId = null) {
@@ -590,25 +716,35 @@ async function showContactAdmin(api, store, chatId, messageId = null) {
 
 async function showTopupMenu(api, store, chatId, userId, messageId = null) {
   const lang = store.getUserLanguage(userId);
-  const text = panel(t("btn_topup", lang), [
-    "اختر طريقة شحن الرصيد المناسبة لك:",
-    "⚡ الشحن الفوري الآلي: تحويل إلى محفظة فودافون كاش / إنستاباي والتأكيد برقمك فوراً.",
+  const isAr = lang === "ar";
+  const text = panel(isAr ? "⚡ شحن رصيد المحفظة" : "⚡ Top-up Wallet", [
+    isAr ? "اختر وسيلة الشحن المناسبة لك لتأكيد الرصيد تلقائياً:" : "Choose your preferred payment method:",
   ]);
-  const rows = [];
-  if (isAutoTopupEnabled() && autoTopupReceiver()) {
-    rows.push([{ text: "⚡ شحن فوري تلقائي (فودافون كاش / إنستاباي)", callback_data: "auto_topup:start" }]);
-  }
-  if (topupsEnabled()) {
-    rows.push([{ text: t("topup_wallet_btn", lang) + " (يدوي)", callback_data: "topup_select:wallet" }]);
-  }
-  const binanceReceiver = String(process.env.MANUAL_BINANCE_RECEIVER || "").trim();
-  if (binanceReceiver) {
-    rows.push([{ text: t("topup_binance_btn", lang), callback_data: "topup_select:binance" }]);
-  }
-  rows.push([adminContactButton(t("btn_contact_admin_topup", lang))]);
-  rows.push([{ text: t("btn_home", lang), callback_data: "main:home" }]);
 
-  await safeEditOrSend(api, chatId, messageId, text, { reply_markup: { inline_keyboard: rows } });
+  const rows = [];
+  if (isAutoTopupEnabled()) {
+    rows.push([
+      { text: isAr ? "📱 محفظة كاش (تأكيد بالرقم)" : "📱 E-Wallet (Confirm by Phone)", callback_data: "auto_topup:wallet" }
+    ]);
+    rows.push([
+      { text: isAr ? "⚡ إنستاباي InstaPay (تأكيد بالاسم)" : "⚡ InstaPay (Confirm by Name)", callback_data: "auto_topup:instapay" }
+    ]);
+    rows.push([
+      { text: isAr ? "🪙 Binance Pay (تأكيد تلقائي بالـ USDT)" : "🪙 Binance Pay (USDT)", callback_data: "auto_topup:binance" }
+    ]);
+  }
+
+  if (topupsEnabled()) {
+    rows.push([{ text: isAr ? "💳 شحن يدوي بمراجعة الإيصال" : "💳 Manual Top-up", callback_data: "topup_select:wallet" }]);
+  }
+
+  rows.push([adminContactButton(t("btn_contact_admin_topup", lang))]);
+  rows.push([{ text: isAr ? "💼 المحفظة" : "💼 Wallet", callback_data: "main:wallet" }, { text: t("btn_home", lang), callback_data: "main:home" }]);
+
+  await safeEditOrSend(api, chatId, messageId, text, {
+    parse_mode: "Markdown",
+    reply_markup: { inline_keyboard: rows }
+  });
 }
 
 async function showAdmin(api, store, superAdmins, chatId, userId, messageId = null) {
@@ -768,26 +904,114 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
     return;
   }
 
-  if (state.state === "auto_topup_amount") {
+  if (state.state === "auto_topup_amount_wallet" || state.state === "auto_topup_amount") {
     const amount = parseMoneyToPiasters(text);
     store.clearState(userId);
     const receiver = autoTopupReceiver();
     const topup = store.createAutoTopup(userId, amount, "wallet", receiver);
     const lines = [
-      `💵 المبلغ المطلوب تحويله بالضبط: ${formatMoney(topup.amount_piasters)}`,
+      `💵 المبلغ المطلوب تحويله بالضبط: **${formatMoney(topup.amount_piasters)}**`,
       `📱 رقم المحفظة / فودافون كاش: \`${receiver}\``,
       "",
-      "📌 خطوات إتمام الشحن:",
-      "1. قم بتحويل المبلغ المحدد أعلاه بالضبط.",
-      "2. بعد التحويل، اضغط على زر [✅ تم التحويل - تأكيد بالرقم] بالأسفل.",
-      "3. سيطلب منك البوت رقم الهاتف الذي حوّلت منه للتحقق من رسالة الـ SMS وإضافة رصيدك فوراً.",
+      "📌 خطوات إتمام الشحن والتأكيد بالرقم:",
+      "1. قم بتحويل المبلغ المحدد أعلاه بالضبط إلى رقم المحفظة.",
+      "2. بعد إتمام التحويل، اضغط على زر [✅ تم التحويل - تأكيد بالرقم] بالأسفل.",
+      "3. سيطلب منك البوت رقم الهاتف الذي حوّلت منه للتحقق من رسالة الـ SMS وإضافة رصيدك فوراً في ثوانٍ.",
     ];
-    await api.sendMessage(chatId, panel("⚡ شحن فوري عبر المحفظة", lines), {
+    await api.sendMessage(chatId, panel("📱 شحن رصيد فوري عبر المحفظة", lines), {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "✅ تم التحويل - تأكيد بالرقم", callback_data: `auto_topup_confirm:${topup.id}` }],
+          [{ text: "✅ تم التحويل - تأكيد بالرقم", callback_data: `auto_topup_confirm_phone:${topup.id}` }],
           [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (state.state === "auto_topup_amount_instapay") {
+    const amount = parseMoneyToPiasters(text);
+    store.clearState(userId);
+    const instapayReceiver = String(process.env.AUTO_TOPUP_INSTAPAY_RECEIVER || process.env.AUTO_TOPUP_WALLET_RECEIVER || "01000000000").trim();
+    const topup = store.createAutoTopup(userId, amount, "instapay", instapayReceiver);
+    const lines = [
+      `💵 المبلغ المطلوب تحويله بالضبط: **${formatMoney(topup.amount_piasters)}**`,
+      `⚡ عنوان / رقم إنستاباي (InstaPay): \`${instapayReceiver}\``,
+      "",
+      "📌 خطوات إتمام الشحن والتأكيد بالاسم:",
+      "1. افتح تطبيق إنستاباي وحوّل المبلغ المحدد أعلاه للعنوان المذكور.",
+      "2. بعد إتمام التحويل، اضغط على زر [✅ تم التحويل - تأكيد بالاسم] بالأسفل.",
+      "3. سيطلب منك البوت اسمك المسجل في إنستاباي أو اسم الحساب المحوِّل لمطابقة الإشعار وإضافة رصيدك فوراً.",
+    ];
+    await api.sendMessage(chatId, panel("⚡ شحن رصيد فوري عبر إنستاباي", lines), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ تم التحويل - تأكيد بالاسم", callback_data: `auto_topup_confirm_name:${topup.id}` }],
+          [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (state.state === "auto_topup_amount_binance") {
+    const amountPiasters = parseMoneyToPiasters(text);
+    store.clearState(userId);
+    const usdtAmount = binancePayClient.calculateUsdtFromEgp(amountPiasters);
+    const topup = store.createAutoTopup(userId, amountPiasters, "binance_pay", "Binance Pay");
+
+    if (binancePayClient.isConfigured()) {
+      try {
+        const orderResult = await binancePayClient.createOrder({
+          merchantTradeNo: topup.provider_order_id,
+          orderAmount: usdtAmount,
+          currency: "USDT",
+          goodsName: `AI Studio Top-up #${topup.id}`,
+        });
+
+        const lines = [
+          `💵 المبلغ المطلوب إضافته: **${formatMoney(topup.amount_piasters)}**`,
+          `🪙 قيمة الدفع بـ USDT: **${usdtAmount.toFixed(2)} USDT**`,
+          `🧾 رقم الطلب: \`${topup.provider_order_id}\``,
+          "",
+          "📌 طريقة الدفع المباشر:",
+          "1. اضغط على زر [🔗 فتح رابط الدفع في Binance] بالأسفل للدفع في ثوانٍ.",
+          "2. بعد إتمام الدفع، اضغط على زر [🔄 تأكيد واستلام الرصيد فوراً] ليتحقق البوت ويشحن رصيدك تلقائياً.",
+        ];
+
+        const inlineRows = [];
+        if (orderResult.checkoutUrl || orderResult.universalUrl) {
+          inlineRows.push([{ text: "🔗 فتح رابط الدفع في Binance", url: orderResult.universalUrl || orderResult.checkoutUrl }]);
+        }
+        inlineRows.push([{ text: "🔄 تأكيد واستلام الرصيد فوراً", callback_data: `binance_pay_check:${topup.id}` }]);
+        inlineRows.push([{ text: "❌ إلغاء", callback_data: "flow:cancel" }]);
+
+        await api.sendMessage(chatId, panel("🪙 فاتورة دفع Binance Pay الفورية", lines), {
+          parse_mode: "Markdown",
+          reply_markup: { inline_keyboard: inlineRows },
+        });
+        return;
+      } catch (err) {
+        log.error("binance", "Failed to create Binance Pay order: " + err.message);
+      }
+    }
+
+    // Fallback if Binance Pay API is not configured
+    const binanceReceiver = String(process.env.MANUAL_BINANCE_RECEIVER || "غير محدد").trim();
+    const lines = [
+      `💵 المبلغ المطلوب: **${formatMoney(topup.amount_piasters)}** (${usdtAmount.toFixed(2)} USDT)`,
+      `🆔 معرف باينانس Binance Pay ID: \`${binanceReceiver}\``,
+      "",
+      "قم بالتحويل عبر Binance Pay ثم تواصل مع الإدارة أو أرسل الإثبات لإضافة الرصيد.",
+    ];
+    await api.sendMessage(chatId, panel("🪙 شحن عبر Binance Pay", lines), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [adminContactButton("📞 التواصل مع الدعم")],
+          [{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }],
         ],
       },
     });
@@ -804,10 +1028,10 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
         const senderPhone = result.transfer?.sender_phone || cleanSender;
         const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
         const lines = [
-          `💵 المبلغ المضاف: ${formatMoney(result.topup.amount_piasters)}`,
+          `💵 المبلغ المضاف: **${formatMoney(result.topup.amount_piasters)}**`,
           `📱 رقم المحول: ${senderPhone}`,
           `🧾 كود العملية: ${trxId}`,
-          `💰 رصيدك الحالي: ${formatMoney(result.balance)}`,
+          `💰 رصيدك الحالي: **${formatMoney(result.balance)}**`,
         ];
         await api.sendMessage(chatId, panel("🎉 تم شحن رصيدك بنجاح!", lines), {
           reply_markup: homeKeyboard(false),
@@ -821,14 +1045,14 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
         `الرقم المدخل: ${cleanSender}`,
         "",
         "⏳ لم يتم العثور على إشعار التحويل حتى الآن.",
-        "💡 إذا كنت قد حوّلت للتو، قد تستغرق شبكة فودافون/المحفظة من 30 إلى 60 ثانية لوصول إشعار الـ SMS.",
+        "💡 إذا كنت قد حوّلت للتو، قد تستغرق شبكة المحفظة من 30 إلى 60 ثانية لوصول إشعار الـ SMS.",
         "يمكنك الانتظار ثوانٍ ثم الضغط على زر [🔄 إعادة الفحص الآن]، أو تأكد من إدخال الرقم الصحيح.",
       ];
       await api.sendMessage(chatId, panel("⏳ في انتظار إشعار التحويل", lines), {
         reply_markup: {
           inline_keyboard: [
-            [{ text: "🔄 إعادة الفحص الآن", callback_data: `auto_topup_retry:${topupId}` }],
-            [{ text: "✏️ تعديل رقم الهاتف المحول منه", callback_data: `auto_topup_confirm:${topupId}` }],
+            [{ text: "🔄 إعادة الفحص الآن", callback_data: `auto_topup_retry_phone:${topupId}` }],
+            [{ text: "✏️ تعديل رقم الهاتف المحول منه", callback_data: `auto_topup_confirm_phone:${topupId}` }],
             [{ text: "❌ إلغاء الطلب", callback_data: "flow:cancel" }],
           ],
         },
@@ -838,7 +1062,60 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       await api.sendMessage(chatId, `⚠️ ${err.message}`, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: "🔄 إعادة المحاولة", callback_data: `auto_topup_confirm:${topupId}` }],
+            [{ text: "🔄 إعادة المحاولة", callback_data: `auto_topup_confirm_phone:${topupId}` }],
+            [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
+          ],
+        },
+      });
+      return;
+    }
+  }
+
+  if (state.state === "auto_topup_sender_name") {
+    const topupId = state.data.topupId;
+    const cleanSender = text.trim();
+    try {
+      const result = store.verifyAndClaimInstaPayTopup(userId, topupId, cleanSender);
+      if (result.ok) {
+        store.clearState(userId);
+        const senderName = result.transfer?.sender_name || cleanSender;
+        const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
+        const lines = [
+          `💵 المبلغ المضاف: **${formatMoney(result.topup.amount_piasters)}**`,
+          `👤 اسم المحول: ${senderName}`,
+          `🧾 كود العملية / المرجع: ${trxId}`,
+          `💰 رصيدك الحالي: **${formatMoney(result.balance)}**`,
+        ];
+        await api.sendMessage(chatId, panel("🎉 تم شحن رصيدك عبر إنستاباي بنجاح!", lines), {
+          reply_markup: homeKeyboard(false),
+        });
+        return;
+      }
+
+      // Not found yet
+      const lines = [
+        `المبلغ المطلوب: ${formatMoney(result.topup.amount_piasters)}`,
+        `الاسم المدخل: ${cleanSender}`,
+        "",
+        "⏳ لم يتم العثور على إشعار تحويل إنستاباي مطابق حتى الآن.",
+        "💡 يرجى التأكد من إتمام التحويل من تطبيق إنستاباي وأن الاسم يطابق اسم حسابك البنكي.",
+        "يمكنك الانتظار ثوانٍ ثم الضغط على [🔄 إعادة الفحص الآن] أو تعديل الاسم:",
+      ];
+      await api.sendMessage(chatId, panel("⏳ في انتظار إشعار إنستاباي", lines), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔄 إعادة الفحص الآن", callback_data: `auto_topup_retry_name:${topupId}` }],
+            [{ text: "✏️ تعديل اسم المحول / المرجع", callback_data: `auto_topup_confirm_name:${topupId}` }],
+            [{ text: "❌ إلغاء الطلب", callback_data: "flow:cancel" }],
+          ],
+        },
+      });
+      return;
+    } catch (err) {
+      await api.sendMessage(chatId, `⚠️ ${err.message}`, {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔄 إعادة المحاولة", callback_data: `auto_topup_confirm_name:${topupId}` }],
             [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
           ],
         },
@@ -1083,21 +1360,23 @@ async function handleMessage(api, store, superAdmins, message) {
   }
 
   // التعامل مع الأزرار الثابتة بالأسفل (Reply Keyboards)
-  if (text === t("btn_products", "ar") || text === t("btn_products", "en")) { store.clearState(userId); await showShop(api, store, chatId); return; }
-  if (text === t("btn_wallet", "ar") || text === t("btn_wallet", "en")) { store.clearState(userId); await showBalance(api, store, chatId, userId); return; }
-  if (text === t("btn_orders", "ar") || text === t("btn_orders", "en")) { store.clearState(userId); await showOrders(api, store, chatId, userId); return; }
-  if (text === t("btn_account", "ar") || text === t("btn_account", "en")) { store.clearState(userId); await showAccount(api, store, chatId, userId, from); return; }
-  if (text === t("btn_contact_admin", "ar") || text === t("btn_contact_admin", "en")) { store.clearState(userId); await showContactAdmin(api, store, chatId); return; }
+  if (text === t("btn_products", "ar") || text === t("btn_products", "en") || text.includes("المنتجات") || text.includes("Products")) { store.clearState(userId); await showShop(api, store, chatId); return; }
+  if (text === t("btn_wallet", "ar") || text === t("btn_wallet", "en") || text.includes("المحفظة") || text.includes("Wallet")) { store.clearState(userId); await showWallet(api, store, chatId, userId); return; }
   if (text === t("btn_language", "ar") || text === t("btn_language", "en") || text.includes("اللغة") || text.includes("Language")) { store.clearState(userId); await showLanguageMenu(api, store, chatId, userId); return; }
+  if (text === t("btn_more", "ar") || text === t("btn_more", "en") || text.includes("المزيد") || text.includes("More")) { store.clearState(userId); await showMoreMenu(api, store, chatId, userId); return; }
+  if (text === t("btn_orders", "ar") || text === t("btn_orders", "en") || text.includes("المشتريات") || text.includes("طلباتي")) { store.clearState(userId); await showOrders(api, store, chatId, userId); return; }
+  if (text === t("btn_statement", "ar") || text === t("btn_statement", "en") || text.includes("كشف حساب")) { store.clearState(userId); await showStatement(api, store, chatId, userId); return; }
+  if (text === t("btn_account", "ar") || text === t("btn_account", "en") || text.includes("الملف الشخصي") || text.includes("حسابي")) { store.clearState(userId); await showAccount(api, store, chatId, userId, from); return; }
+  if (text === t("btn_contact_admin", "ar") || text === t("btn_contact_admin", "en") || text.includes("الدعم الفني") || text.includes("التواصل مع الأدمن")) { store.clearState(userId); await showContactAdmin(api, store, chatId); return; }
   if (text === t("btn_admin_panel", "ar") || text === t("btn_admin_panel", "en")) { store.clearState(userId); await showAdmin(api, store, superAdmins, chatId, userId); return; }
-  if (text === t("btn_topup", "ar") || text === t("btn_topup", "en")) {
+  if (text === t("btn_topup", "ar") || text === t("btn_topup", "en") || text.includes("إضافة رصيد") || text.includes("شحن الرصيد")) {
     store.clearState(userId);
     await showTopupMenu(api, store, chatId, userId);
     return;
   }
-  if (text === t("btn_search", "ar") || text === t("btn_search", "en")) {
+  if (text === t("btn_search", "ar") || text === t("btn_search", "en") || text.includes("البحث") || text.includes("بحث")) {
     store.setState(userId, "search_query", {});
-    await api.sendMessage(chatId, "🔍 أرسل اسم المنتج الذي تبحث عنه:", { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
+    await api.sendMessage(chatId, "🔍 أرسل اسم الاشتراك أو المنتج الذي تبحث عنه:", { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
     return;
   }
 
@@ -1245,12 +1524,14 @@ async function handleCallback(api, store, superAdmins, query) {
     return;
   }
   if (data === "main:shop") { await showShop(api, store, chatId, messageId); return; }
-  if (data === "main:balance") { await showBalance(api, store, chatId, userId, messageId); return; }
+  if (data === "main:wallet" || data === "main:balance") { await showWallet(api, store, chatId, userId, messageId); return; }
+  if (data === "main:more") { await showMoreMenu(api, store, chatId, userId, messageId); return; }
+  if (data === "main:statement") { await showStatement(api, store, chatId, userId, messageId); return; }
   if (data === "main:orders") { await showOrders(api, store, chatId, userId, messageId); return; }
   if (data === "main:account") { await showAccount(api, store, chatId, userId, from, messageId); return; }
   if (data === "main:search") {
     store.setState(userId, "search_query", {});
-    await safeEditOrSend(api, chatId, messageId, "🔍 أرسل اسم المنتج الذي تبحث عنه:", {
+    await safeEditOrSend(api, chatId, messageId, "🔍 أرسل اسم الاشتراك أو المنتج الذي تبحث عنه:", {
       reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] }
     });
     return;
@@ -1262,22 +1543,53 @@ async function handleCallback(api, store, superAdmins, query) {
     return;
   }
 
-  if (data === "auto_topup:start") {
+  // طرق الشحن الإلكتروني الفوري:
+  if (data === "auto_topup:wallet" || data === "auto_topup:start") {
     const receiver = autoTopupReceiver();
     if (!receiver) {
-      await safeEditOrSend(api, chatId, messageId, "⚠️ خدمة الشحن الآلي غير مهيأة حالياً (رقم الاستقبال غير محدد). يرجى التواصل مع الإدارة.", {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ خدمة الشحن عبر المحفظة غير مهيأة حالياً. يرجى التواصل مع الإدارة.", {
         reply_markup: homeKeyboard(false),
       });
       return;
     }
-    store.setState(userId, "auto_topup_amount", {});
-    await safeEditOrSend(api, chatId, messageId, "✏️ أرسل المبلغ الذي تريد شحنه بـ EGP (مثال: 50 أو 100):", {
+    store.setState(userId, "auto_topup_amount_wallet", {});
+    await safeEditOrSend(api, chatId, messageId, panel("📱 شحن عبر المحفظة الإلكترونية", [
+      "✏️ أرسل المبلغ الذي تريد شحنه بالجنيه المصري (مثال: 50 أو 100):",
+      `📱 سيتم التحويل إلى رقم المحفظة: \`${receiver}\``,
+    ]), {
+      parse_mode: "Markdown",
       reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
     });
     return;
   }
 
-  if (data.startsWith("auto_topup_confirm:")) {
+  if (data === "auto_topup:instapay") {
+    const instapayReceiver = String(process.env.AUTO_TOPUP_INSTAPAY_RECEIVER || process.env.AUTO_TOPUP_WALLET_RECEIVER || "01000000000").trim();
+    store.setState(userId, "auto_topup_amount_instapay", {});
+    await safeEditOrSend(api, chatId, messageId, panel("⚡ شحن فوري عبر إنستاباي", [
+      "✏️ أرسل المبلغ الذي تريد شحنه بالجنيه المصري (مثال: 50 أو 100):",
+      `⚡ عنوان / رقم إنستاباي: \`${instapayReceiver}\``,
+    ]), {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
+    });
+    return;
+  }
+
+  if (data === "auto_topup:binance") {
+    store.setState(userId, "auto_topup_amount_binance", {});
+    const rate = binancePayClient.getUsdtRate();
+    await safeEditOrSend(api, chatId, messageId, panel("🪙 شحن تلقائي عبر Binance Pay", [
+      "✏️ أرسل مبلغ الرصيد الذي تريد إضافته بالجنيه (مثال: 50 أو 100 أو 500):",
+      `سعر احتساب 1 USDT = ${rate.toFixed(2)} EGP`,
+    ]), {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("auto_topup_confirm_phone:") || data.startsWith("auto_topup_confirm:")) {
     const topupId = Number(data.split(":")[1]);
     const topup = store.getTopup(topupId);
     if (!topup || topup.user_id !== userId) {
@@ -1291,7 +1603,21 @@ async function handleCallback(api, store, superAdmins, query) {
     return;
   }
 
-  if (data.startsWith("auto_topup_retry:")) {
+  if (data.startsWith("auto_topup_confirm_name:")) {
+    const topupId = Number(data.split(":")[1]);
+    const topup = store.getTopup(topupId);
+    if (!topup || topup.user_id !== userId) {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ طلب الشحن غير موجود أو منتهي الصلاحية.", { reply_markup: homeKeyboard(false) });
+      return;
+    }
+    store.setState(userId, "auto_topup_sender_name", { topupId });
+    await safeEditOrSend(api, chatId, messageId, "👤 أرسل الآن اسم الراسل المسجل في إنستاباي أو رقم المرجع:", {
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("auto_topup_retry_phone:") || data.startsWith("auto_topup_retry:")) {
     const topupId = Number(data.split(":")[1]);
     const topup = store.getTopup(topupId);
     if (!topup || topup.user_id !== userId) {
@@ -1313,10 +1639,10 @@ async function handleCallback(api, store, superAdmins, query) {
         const senderPhone = result.transfer?.sender_phone || topup.sender_identifier;
         const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
         const lines = [
-          `💵 المبلغ المضاف: ${formatMoney(result.topup.amount_piasters)}`,
+          `💵 المبلغ المضاف: **${formatMoney(result.topup.amount_piasters)}**`,
           `📱 رقم المحول: ${senderPhone}`,
           `🧾 كود العملية: ${trxId}`,
-          `💰 رصيدك الحالي: ${formatMoney(result.balance)}`,
+          `💰 رصيدك الحالي: **${formatMoney(result.balance)}**`,
         ];
         await safeEditOrSend(api, chatId, messageId, panel("🎉 تم شحن رصيدك بنجاح!", lines), {
           reply_markup: homeKeyboard(false),
@@ -1326,6 +1652,95 @@ async function handleCallback(api, store, superAdmins, query) {
 
       await api.answerCallbackQuery(query.id, {
         text: "⏳ لم تصل رسالة التحويل بعد. انتظر ثوانٍ وجرب مرة أخرى.",
+        show_alert: true,
+      }).catch(() => { });
+    } catch (err) {
+      await api.answerCallbackQuery(query.id, {
+        text: `⚠️ ${err.message}`,
+        show_alert: true,
+      }).catch(() => { });
+    }
+    return;
+  }
+
+  if (data.startsWith("auto_topup_retry_name:")) {
+    const topupId = Number(data.split(":")[1]);
+    const topup = store.getTopup(topupId);
+    if (!topup || topup.user_id !== userId) {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ طلب الشحن غير موجود أو منتهي الصلاحية.", { reply_markup: homeKeyboard(false) });
+      return;
+    }
+    if (!topup.sender_identifier) {
+      store.setState(userId, "auto_topup_sender_name", { topupId });
+      await safeEditOrSend(api, chatId, messageId, "👤 يرجى إرسال اسم الراسل في إنستاباي أولاً:", {
+        reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
+      });
+      return;
+    }
+
+    try {
+      const result = store.verifyAndClaimInstaPayTopup(userId, topupId, topup.sender_identifier);
+      if (result.ok) {
+        store.clearState(userId);
+        const senderName = result.transfer?.sender_name || topup.sender_identifier;
+        const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
+        const lines = [
+          `💵 المبلغ المضاف: **${formatMoney(result.topup.amount_piasters)}**`,
+          `👤 اسم المحول: ${senderName}`,
+          `🧾 كود العملية / المرجع: ${trxId}`,
+          `💰 رصيدك الحالي: **${formatMoney(result.balance)}**`,
+        ];
+        await safeEditOrSend(api, chatId, messageId, panel("🎉 تم شحن رصيدك عبر إنستاباي بنجاح!", lines), {
+          reply_markup: homeKeyboard(false),
+        });
+        return;
+      }
+
+      await api.answerCallbackQuery(query.id, {
+        text: "⏳ لم تصل رسالة إنستاباي بعد. انتظر ثوانٍ وجرب مرة أخرى.",
+        show_alert: true,
+      }).catch(() => { });
+    } catch (err) {
+      await api.answerCallbackQuery(query.id, {
+        text: `⚠️ ${err.message}`,
+        show_alert: true,
+      }).catch(() => { });
+    }
+    return;
+  }
+
+  if (data.startsWith("binance_pay_check:")) {
+    const topupId = Number(data.split(":")[1]);
+    const topup = store.getTopup(topupId);
+    if (!topup || topup.user_id !== userId) {
+      await api.answerCallbackQuery(query.id, { text: "⚠️ طلب الشحن غير موجود.", show_alert: true }).catch(() => { });
+      return;
+    }
+    if (topup.status === "succeeded") {
+      await api.answerCallbackQuery(query.id, { text: "🎉 تم إضافة الرصيد لحسابك بالفعل!", show_alert: true }).catch(() => { });
+      await showWallet(api, store, chatId, userId, messageId);
+      return;
+    }
+
+    try {
+      const queryResult = await binancePayClient.queryOrder({ merchantTradeNo: topup.provider_order_id });
+      if (queryResult.isPaid) {
+        const claim = store.verifyAndClaimBinanceTopup(userId, topup.id, queryResult);
+        await api.answerCallbackQuery(query.id, { text: "🎉 تم التحقق وإضافة الرصيد بنجاح!", show_alert: true }).catch(() => { });
+        const lines = [
+          `💵 المبلغ المضاف: **${formatMoney(claim.topup.amount_piasters)}**`,
+          `🪙 العملة: USDT (${queryResult.totalFee || ""})`,
+          `🧾 رقم العملية: ${queryResult.transactionId || topup.provider_order_id}`,
+          `💰 رصيدك الحالي: **${formatMoney(claim.balance)}**`,
+        ];
+        await safeEditOrSend(api, chatId, messageId, panel("🎉 تم شحن رصيدك بنجاح!", lines), {
+          reply_markup: homeKeyboard(false),
+        });
+        return;
+      }
+
+      await api.answerCallbackQuery(query.id, {
+        text: "⏳ لم يتم تسجيل الدفع في بايننس بعد. تأكد من إتمام العملية في التطبيق ثم أعد المحاولة.",
         show_alert: true,
       }).catch(() => { });
     } catch (err) {

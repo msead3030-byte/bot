@@ -184,9 +184,11 @@ function migrate(db) {
     CREATE TABLE IF NOT EXISTS sms_transfers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       trx_id TEXT UNIQUE NOT NULL,
-      sender_phone TEXT NOT NULL,
+      sender_phone TEXT NOT NULL DEFAULT '',
+      sender_name TEXT NOT NULL DEFAULT '',
       amount_piasters INTEGER NOT NULL,
       provider TEXT NOT NULL DEFAULT 'vodafone_cash',
+      payment_method TEXT NOT NULL DEFAULT 'wallet',
       raw_message TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'unclaimed',
       claimed_by_user_id TEXT,
@@ -208,12 +210,21 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_price_overrides_user ON user_price_overrides(user_id);
     CREATE INDEX IF NOT EXISTS idx_price_overrides_product ON user_price_overrides(product_id);
     CREATE INDEX IF NOT EXISTS idx_sms_transfers_lookup ON sms_transfers(sender_phone, amount_piasters, status);
+    CREATE INDEX IF NOT EXISTS idx_sms_transfers_name ON sms_transfers(sender_name, amount_piasters, status);
     CREATE INDEX IF NOT EXISTS idx_sms_transfers_trx ON sms_transfers(trx_id);
     CREATE INDEX IF NOT EXISTS idx_sms_transfers_status ON sms_transfers(status, received_at);
   `);
 
   if (!columnExists(db, "users", "language")) {
     db.exec("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT ''");
+  }
+
+  if (!columnExists(db, "sms_transfers", "sender_name")) {
+    db.exec("ALTER TABLE sms_transfers ADD COLUMN sender_name TEXT NOT NULL DEFAULT ''");
+  }
+
+  if (!columnExists(db, "sms_transfers", "payment_method")) {
+    db.exec("ALTER TABLE sms_transfers ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'wallet'");
   }
 }
 

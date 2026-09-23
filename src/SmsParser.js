@@ -26,6 +26,56 @@ function normalizePhoneNumber(raw) {
 }
 
 /**
+ * Normalizes Arabic and English person names for flexible and fuzzy matching:
+ * - Unifies alef forms (أ إ آ -> ا)
+ * - Unifies yaa forms (ى -> ي)
+ * - Unifies taa marbuta (ة -> ه)
+ * - Strips tashkeel / diacritics
+ * - Normalizes whitespace and casing
+ */
+function normalizeSenderName(raw) {
+  if (!raw) return "";
+  let name = String(raw).trim().toLowerCase();
+  // Remove Arabic diacritics
+  name = name.replace(/[\u064B-\u065F\u0670]/g, "");
+  // Normalize letters
+  name = name.replace(/[أإآ]/g, "ا");
+  name = name.replace(/ى/g, "ي");
+  name = name.replace(/ة/g, "ه");
+  name = name.replace(/ؤ/g, "و");
+  name = name.replace(/ئ/g, "ي");
+  // Remove non-alphanumeric except spaces
+  name = name.replace(/[^\p{L}\p{N}\s]/gu, " ");
+  // Collapse whitespace
+  name = name.replace(/\s+/g, " ").trim();
+  return name;
+}
+
+/**
+ * Checks if input sender name matches the candidate name from SMS:
+ * e.g. "احمد علي" matches "أحمد علي إبراهيم"
+ */
+function isNameMatch(inputName, candidateName) {
+  const normInput = normalizeSenderName(inputName);
+  const normCandidate = normalizeSenderName(candidateName);
+  if (!normInput || !normCandidate) return false;
+
+  // Exact match
+  if (normCandidate === normInput) return true;
+
+  // Substring match
+  if (normCandidate.includes(normInput) || normInput.includes(normCandidate)) return true;
+
+  // Check if every individual word of input exists in candidate
+  const inputWords = normInput.split(" ").filter((w) => w.length > 1);
+  if (inputWords.length > 0 && inputWords.every((word) => normCandidate.includes(word))) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Parses numeric amount to piasters (e.g. 50.50 EGP -> 5050 piasters)
  */
 function toPiasters(amountStr) {
@@ -39,20 +89,10 @@ function toPiasters(amountStr) {
  * Detects the service provider and extracts payment details from raw SMS text.
  * Supported providers:
  * - Vodafone Cash (فودافون كاش)
- * - InstaPay (إنستاباي)
+ * - InstaPay (إنستاباي / IPN)
  * - Orange Cash (أورانج كاش)
  * - Etisalat Cash (اتصالات كاش)
  * - WE Pay (وي باي)
- * 
- * Returns: {
- *   ok: boolean,
- *   provider: string,
- *   amountPiasters: number,
- *   amountEgp: number,
- *   senderPhone: string,
- *   trxId: string,
- *   rawMessage: string
- * } or null if not a recognized transfer SMS.
  */
 function parseSms(message) {
   const text = String(message || "").trim();
@@ -61,12 +101,7 @@ function parseSms(message) {
   // ----------------------------------------------------
   // 1. Vodafone Cash (فودافون كاش)
   // ----------------------------------------------------
-  // أشكال رسائل فودافون كاش:
-  // "تم استلام مبلغ 100.00 جنيه من 01012345678 بنجاح ... رقم العملية: 1234567890."
-  // "تم استلام مبلغ 100 ج.م من 01012345678 بنجاح ... رقم العملية 1234567890"
-  // "You have received 100.00 EGP from 01012345678. Transaction ID: 1234567890."
   if (text.includes("تم استلام مبلغ") || text.includes("You have received") || text.includes("فودافون كاش") || text.includes("Vodafone Cash")) {
-    // Arabic Vodafone Cash
     const arMatch = text.match(/تم\s+استلام\s+مبلغ\s+([\d,.]+)\s*(?:جنيه|ج\.م|جم)?\s+من\s*(?:رقم)?\s*([0-9+]+)/i);
     const arTrx = text.match(/(?:رقم\s+العملية|العملية|كود\s+العملية|مرجع)[:\s]*([A-Za-z0-9_-]+)/i);
 
@@ -79,16 +114,17 @@ function parseSms(message) {
         return {
           ok: true,
           provider: "vodafone_cash",
+          paymentMethod: "wallet",
           amountPiasters,
           amountEgp: amountPiasters / 100,
           senderPhone,
+          senderName: "",
           trxId: `vf_${trxId}`,
           rawMessage: text,
         };
       }
     }
 
-    // English Vodafone Cash
     const enMatch = text.match(/received\s+([\d,.]+)\s*EGP\s+from\s*([0-9+]+)/i);
     const enTrx = text.match(/(?:Transaction\s*ID|Trx\s*ID|Ref)[:\s]*([A-Za-z0-9_-]+)/i);
     if (enMatch) {
@@ -100,9 +136,11 @@ function parseSms(message) {
         return {
           ok: true,
           provider: "vodafone_cash",
+          paymentMethod: "wallet",
           amountPiasters,
           amountEgp: amountPiasters / 100,
           senderPhone,
+          senderName: "",
           trxId: `vf_${trxId}`,
           rawMessage: text,
         };
@@ -111,28 +149,51 @@ function parseSms(message) {
   }
 
   // ----------------------------------------------------
-  // 2. InstaPay (إنستاباي / IPN)
+  // 2. InstaPay (إنستاباي / IPN / التحويلات اللحظية)
   // ----------------------------------------------------
-  // "تم تحويل مبلغ 100.00 جم لحسابك من ... مرجع: 1234567890"
-  // "Received EGP 100.00 via IPN from 010... Ref: 1234567890"
-  if (text.includes("إنستاباي") || text.includes("انستاباي") || text.includes("InstaPay") || text.includes("IPN") || (text.includes("مرجع") && text.includes("مبلغ"))) {
+  if (
+    text.includes("إنستاباي") ||
+    text.includes("انستاباي") ||
+    text.includes("InstaPay") ||
+    text.includes("IPN") ||
+    (text.includes("مرجع") && text.includes("مبلغ"))
+  ) {
     const instapayAmount = text.match(/(?:مبلغ|EGP|جنيه|جم)\s*([\d,.]+)|([\d,.]+)\s*(?:EGP|جم|جنيه)/i);
-    const instapayPhone = text.match(/من\s*(?:رقم|حساب)?\s*([0-9+]{10,14})/i) || text.match(/(01[0125]\d{8})/);
-    const instapayRef = text.match(/(?:مرجع|Ref|رقم\s+المرجع)[:\s]*([A-Za-z0-9_-]+)/i);
+    const instapayRef = text.match(/(?:مرجع|Ref|رقم\s+المرجع|كود\s+العملية|Transaction\s*ID)[:\s]*([A-Za-z0-9_-]+)/i);
 
     const amtStr = instapayAmount ? (instapayAmount[1] || instapayAmount[2]) : null;
     if (amtStr && instapayRef) {
       const amountPiasters = toPiasters(amtStr);
-      const senderPhone = instapayPhone ? normalizePhoneNumber(instapayPhone[1]) : "";
       const trxId = instapayRef[1].replace(/[^\w-]/g, "");
+
+      // Extract sender phone if present
+      const phoneMatch = text.match(/من\s*(?:رقم|حساب)?\s*([0-9+]{10,14})/i) || text.match(/(01[0125]\d{8})/);
+      const senderPhone = phoneMatch ? normalizePhoneNumber(phoneMatch[1]) : "";
+
+      // Extract sender name if present
+      let senderName = "";
+      const nameMatchAr = text.match(/(?:من|بواسطة|العميل)\s+([\p{L}\s]{3,40}?)(?=\s+(?:عبر|من\s+خلال|مرجع|كود|بمبلغ|لحسابك|بتاريخ|\.|$))/iu);
+      if (nameMatchAr && !/\d/.test(nameMatchAr[1])) {
+        senderName = nameMatchAr[1].trim();
+      }
+
+      if (!senderName) {
+        const nameMatchEn = text.match(/(?:from|by)\s+([A-Za-z\s]{3,40}?)(?=\s+(?:via|ref|account|on|\.|$))/i);
+        if (nameMatchEn && !/\d/.test(nameMatchEn[1])) {
+          senderName = nameMatchEn[1].trim();
+        }
+      }
 
       if (amountPiasters > 0 && trxId) {
         return {
           ok: true,
           provider: "instapay",
+          paymentMethod: "instapay",
           amountPiasters,
           amountEgp: amountPiasters / 100,
           senderPhone,
+          senderName: normalizeSenderName(senderName),
+          rawSenderName: senderName,
           trxId: `insta_${trxId}`,
           rawMessage: text,
         };
@@ -143,7 +204,6 @@ function parseSms(message) {
   // ----------------------------------------------------
   // 3. Orange Cash, Etisalat Cash, WE Pay (عام لكافة المحافظ)
   // ----------------------------------------------------
-  // نمط عام للمحافظ الإلكترونية المصرية
   const genericAmountMatch = text.match(/(?:استلام|تحويل|إيداع|مبلغ)\s+([\d,.]+)\s*(?:جنيه|ج\.م|جم|EGP)?/i)
     || text.match(/([\d,.]+)\s*(?:جنيه|ج\.م|جم|EGP)/i);
   const genericPhoneMatch = text.match(/(?:من|رقم)?\s*(01[0125]\d{8})/);
@@ -163,9 +223,11 @@ function parseSms(message) {
       return {
         ok: true,
         provider,
+        paymentMethod: "wallet",
         amountPiasters,
         amountEgp: amountPiasters / 100,
         senderPhone,
+        senderName: "",
         trxId: `${provider}_${trxId}`,
         rawMessage: text,
       };
@@ -177,6 +239,8 @@ function parseSms(message) {
 
 module.exports = {
   normalizePhoneNumber,
+  normalizeSenderName,
+  isNameMatch,
   parseSms,
   toPiasters,
 };

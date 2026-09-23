@@ -216,25 +216,42 @@ class SmsWebhookServer {
 
       // Look for pending top-up waiting for this transfer
       let autoCredited = false;
-      const pendingTopup = this.store.findPendingTopupForSms(parsed.senderPhone, parsed.amountPiasters);
+      const pendingTopup = this.store.findPendingTopupForSms(
+        parsed.senderPhone,
+        parsed.amountPiasters,
+        new Date().toISOString(),
+        parsed.senderName
+      );
+
       if (pendingTopup) {
         try {
-          const claimResult = this.store.verifyAndClaimSmsTopup(
-            pendingTopup.user_id,
-            pendingTopup.id,
-            parsed.senderPhone
-          );
+          const claimResult = parsed.paymentMethod === "instapay" || pendingTopup.instructions === "instapay"
+            ? this.store.verifyAndClaimInstaPayTopup(
+                pendingTopup.user_id,
+                pendingTopup.id,
+                parsed.rawSenderName || parsed.senderName || parsed.trxId
+              )
+            : this.store.verifyAndClaimSmsTopup(
+                pendingTopup.user_id,
+                pendingTopup.id,
+                parsed.senderPhone
+              );
+
           if (claimResult.ok) {
             autoCredited = true;
             // Notify user on Telegram
             if (this.api && pendingTopup.user_id) {
               const amountEgp = (parsed.amountPiasters / 100).toFixed(2);
               const balanceEgp = (claimResult.balance / 100).toFixed(2);
+              const senderDetail = parsed.senderName
+                ? `👤 اسم المحوِّل: ${parsed.rawSenderName || parsed.senderName}`
+                : `📱 رقم المحول: ${parsed.senderPhone}`;
+
               const notification = [
                 "🎉 تم تأكيد استلام تحويلك بنجاح!",
                 "━━━━━━━━━━━━━━━━━━━━━━━━",
                 `💵 المبلغ المضاف: ${amountEgp} جنيه`,
-                `📱 رقم المحول: ${parsed.senderPhone}`,
+                senderDetail,
                 `🧾 كود العملية: ${parsed.trxId.replace(/^\w+_/, "")}`,
                 `💰 رصيدك الحالي: ${balanceEgp} جنيه`,
               ].join("\n");
@@ -253,8 +270,60 @@ class SmsWebhookServer {
         trxId: parsed.trxId,
         amountEgp: parsed.amountEgp,
         senderPhone: parsed.senderPhone,
+        senderName: parsed.senderName || "",
         autoCredited,
       });
+      return;
+    }
+
+    // Binance Pay Webhook
+    if (url.pathname === "/api/binance/webhook") {
+      if (method !== "POST") {
+        sendJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+        return;
+      }
+
+      const body = await parseBody(req);
+      const bizStatus = body.bizStatus || body.data?.status || body.status || "";
+      const rawData = body.data ? (typeof body.data === "string" ? JSON.parse(body.data) : body.data) : body;
+      const merchantTradeNo = rawData.merchantTradeNo || body.merchantTradeNo || "";
+
+      if (!merchantTradeNo) {
+        sendJson(res, 400, { ok: false, error: "Missing merchantTradeNo in payload." });
+        return;
+      }
+
+      if (bizStatus === "PAY_SUCCESS" || rawData.status === "PAID" || rawData.orderStatus === "PAID") {
+        const topup = this.store.db.prepare("SELECT * FROM topups WHERE provider_order_id = ?").get(merchantTradeNo);
+        if (topup && topup.status === "pending") {
+          try {
+            const claimResult = this.store.verifyAndClaimBinanceTopup(topup.user_id, topup.id, {
+              ...rawData,
+              isPaid: true,
+              merchantTradeNo,
+            });
+
+            if (claimResult.ok && this.api && topup.user_id) {
+              const amountEgp = (topup.amount_piasters / 100).toFixed(2);
+              const balanceEgp = (claimResult.balance / 100).toFixed(2);
+              const notification = [
+                "🎉 تم استلام شحن Binance Pay بنجاح!",
+                "━━━━━━━━━━━━━━━━━━━━━━━━",
+                `💵 المبلغ المضاف: ${amountEgp} جنيه`,
+                `🪙 وسيلة الدفع: Binance Pay (USDT)`,
+                `🧾 رقم الطلب: ${merchantTradeNo}`,
+                `💰 رصيدك الحالي: ${balanceEgp} جنيه`,
+              ].join("\n");
+
+              this.api.sendMessage(topup.user_id, notification).catch(() => { });
+            }
+          } catch (err) {
+            console.error("[Binance Webhook] Auto-credit error:", err.message);
+          }
+        }
+      }
+
+      sendJson(res, 200, { returnCode: "SUCCESS", returnMessage: null });
       return;
     }
 

@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node bin/m-automation-bot.js",
-    "check": "node -e \"['bin/m-automation-bot.js','bin/seed-sample.js','src/CashupClient.js','src/SecretBox.js','src/StoreDatabase.js','src/StoreService.js','src/TelegramApi.js','src/i18n.js','src/bot.js'].forEach(f=>require('child_process').execSync('node --check '+f))\"",
+    "check": "node -e \"['bin/m-automation-bot.js','bin/seed-sample.js','src/BinancePayClient.js','src/CashupClient.js','src/SecretBox.js','src/StoreDatabase.js','src/StoreService.js','src/TelegramApi.js','src/i18n.js','src/bot.js'].forEach(f=>require('child_process').execSync('node --check '+f))\"",
     "test": "node --test",
     "seed:sample": "node bin/seed-sample.js"
   },
