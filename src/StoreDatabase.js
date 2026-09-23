@@ -210,13 +210,16 @@ function migrate(db) {
     CREATE INDEX IF NOT EXISTS idx_price_overrides_user ON user_price_overrides(user_id);
     CREATE INDEX IF NOT EXISTS idx_price_overrides_product ON user_price_overrides(product_id);
     CREATE INDEX IF NOT EXISTS idx_sms_transfers_lookup ON sms_transfers(sender_phone, amount_piasters, status);
-    CREATE INDEX IF NOT EXISTS idx_sms_transfers_name ON sms_transfers(sender_name, amount_piasters, status);
     CREATE INDEX IF NOT EXISTS idx_sms_transfers_trx ON sms_transfers(trx_id);
     CREATE INDEX IF NOT EXISTS idx_sms_transfers_status ON sms_transfers(status, received_at);
   `);
 
   if (!columnExists(db, "users", "language")) {
     db.exec("ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT ''");
+  }
+
+  if (!columnExists(db, "topups", "sender_identifier")) {
+    db.exec("ALTER TABLE topups ADD COLUMN sender_identifier TEXT NOT NULL DEFAULT ''");
   }
 
   if (!columnExists(db, "sms_transfers", "sender_name")) {
@@ -226,6 +229,10 @@ function migrate(db) {
   if (!columnExists(db, "sms_transfers", "payment_method")) {
     db.exec("ALTER TABLE sms_transfers ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'wallet'");
   }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sms_transfers_name ON sms_transfers(sender_name, amount_piasters, status);
+  `);
 }
 
 module.exports = {

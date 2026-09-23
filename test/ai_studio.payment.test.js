@@ -168,3 +168,45 @@ test("BinancePayClient calculates USDT conversions accurately", () => {
   assert.equal(client.calculateUsdtFromEgp(25000), 5.00); // 250 EGP = 5.00 USDT
   assert.equal(client.calculatePiastersFromUsdt(10.00), 50000); // 10 USDT = 500 EGP (50000 piasters)
 });
+
+test("StoreDatabase migrates existing database with older sms_transfers schema cleanly", () => {
+  const Database = require("better-sqlite3");
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "migration-test-"));
+  const dbPath = path.join(directory, "old_store.db");
+  const rawDb = new Database(dbPath);
+  // Create an old version of sms_transfers without sender_name or payment_method
+  rawDb.exec(`
+    CREATE TABLE users (telegram_id TEXT PRIMARY KEY, username TEXT, first_name TEXT, last_name TEXT, language TEXT, created_at TEXT, updated_at TEXT);
+    CREATE TABLE sms_transfers (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trx_id TEXT UNIQUE NOT NULL,
+      sender_phone TEXT NOT NULL,
+      amount_piasters INTEGER NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'vodafone_cash',
+      raw_message TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'unclaimed',
+      claimed_by_user_id TEXT,
+      claimed_topup_id INTEGER,
+      received_at TEXT NOT NULL,
+      claimed_at TEXT
+    );
+  `);
+  rawDb.close();
+
+  // Now open with openStoreDatabase, which runs migrate(db)
+  const migratedDb = openStoreDatabase(dbPath);
+  try {
+    const tableInfo = migratedDb.prepare('PRAGMA table_info("sms_transfers")').all();
+    const columns = tableInfo.map((col) => col.name);
+    assert.ok(columns.includes("sender_name"), "Should contain sender_name");
+    assert.ok(columns.includes("payment_method"), "Should contain payment_method");
+
+    // Also verify the index exists and works
+    const indexes = migratedDb.prepare('PRAGMA index_list("sms_transfers")').all();
+    assert.ok(indexes.some((idx) => idx.name === "idx_sms_transfers_name"), "Should create idx_sms_transfers_name");
+  } finally {
+    migratedDb.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
