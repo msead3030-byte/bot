@@ -164,12 +164,24 @@ class SmsWebhookServer {
 
     // Webhook endpoint
     if (url.pathname === "/api/sms/webhook") {
+      if (method === "GET") {
+        sendJson(res, 200, { ok: true, message: "SMS Webhook endpoint is active. Use POST to submit SMS messages." });
+        return;
+      }
+
       if (method !== "POST") {
         sendJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
         return;
       }
 
       const body = await parseBody(req);
+
+      // Handle ping/test events from webhook dashboards (e.g. mysmsgate.net)
+      const eventType = String(body.event || body.eventType || body.type || "").toLowerCase();
+      if (eventType.includes("ping") || eventType.includes("test") || body.action === "ping") {
+        sendJson(res, 200, { ok: true, status: "pong", message: "Webhook verified successfully." });
+        return;
+      }
 
       // Authenticate secret token using timing-safe comparison
       const authHeader = req.headers["x-webhook-secret"] || req.headers["authorization"] || "";
@@ -183,8 +195,9 @@ class SmsWebhookServer {
         }
       }
 
-      // Extract message text from common forwarder body keys
-      const rawText = body.message || body.text || body.body || body.content || body.sms || body.raw || "";
+      // Extract message text from common forwarder body keys (including mysmsgate.net / android-sms-gateway)
+      const payloadObj = (body.payload && typeof body.payload === "object") ? body.payload : {};
+      const rawText = body.message || payloadObj.message || body.text || payloadObj.text || body.body || body.content || body.sms || body.raw || "";
       if (!rawText) {
         sendJson(res, 400, { ok: false, error: "Missing message/text in request body." });
         return;
