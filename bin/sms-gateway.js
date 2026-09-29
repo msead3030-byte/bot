@@ -174,7 +174,7 @@ async function testLocalWebhook() {
       messageId: "msg-" + Date.now(),
       message: `تم استلام مبلغ 50.00 جنيه من 01012345678 رقم العملية test_${Math.floor(Math.random() * 900000 + 100000)}`,
       sender: "VodafoneCash",
-      recipient: "+201021510826",
+      recipient: "+201104826670",
       simNumber: 2,
       receivedAt: new Date().toISOString(),
     },

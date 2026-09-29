@@ -121,7 +121,7 @@ function staffStatus(store, superAdmins, userId) {
 }
 
 function adminContactUrl() {
-  const url = String(process.env.ADMIN_CONTACT_URL || "").trim();
+  const url = String(process.env.ADMIN_PAGE_LINK || process.env.ADMIN_CONTACT_URL || process.env.ADMIN_LINK || "").trim();
   if (url) {
     if (url.startsWith("http://") || url.startsWith("https://")) return url;
     return `https://t.me/${url.replace(/^@/, "")}`;
