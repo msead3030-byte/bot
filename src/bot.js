@@ -236,6 +236,9 @@ function homeKeyboard(isStaff = false, lang = "ar") {
         { text: isAr ? "🌐 اللغة" : "🌐 Language", callback_data: "main:language" },
         { text: isAr ? "➕ المزيد" : "➕ More", callback_data: "main:more" },
       ],
+      [
+        adminContactButton(isAr ? "💬 الدعم الفني والمساعدة" : "💬 Support & Help"),
+      ],
       ...(isStaff ? [[{ text: isAr ? "⚙️ لوحة الإدارة والتحكم" : "⚙️ Admin Terminal", callback_data: "main:admin" }]] : []),
     ],
   };
@@ -699,15 +702,18 @@ async function showAccount(api, store, chatId, userId, from = {}, messageId = nu
 }
 
 async function showContactAdmin(api, store, chatId, messageId = null) {
-  const url = adminContactUrl();
+  const url = adminContactUrl() || "https://t.me/m_salm1";
   const lines = [
-    "💬 خدمة العملاء والدعم الفني",
+    "💬 خدمة العملاء والدعم الفني المباشر",
     "",
-    url ? "يمكنك التواصل مباشرة مع الأدمن عبر الرابط الأدناه:" : "يرجى التواصل مع مالك البوت أو الأدمن لإدارة حسابك وشحن رصيدك.",
+    "يمكنك التواصل مباشرة مع الأدمن لحل أي استفسار أو مشكلة:",
+    "👤 حساب الدعم: @m_salm1",
+    "",
+    "👇 اضغط على الزر أدناه لبدء المحادثة فوراً:"
   ];
   const keyboard = {
     inline_keyboard: [
-      ...(url ? [[{ text: "💬 فتح محادثة الأدمن", url }]] : []),
+      [{ text: "💬 فتح محادثة الأدمن مباشرة (@m_salm1)", url }],
       [{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }],
     ],
   };
