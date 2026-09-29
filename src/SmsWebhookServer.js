@@ -164,13 +164,33 @@ class SmsWebhookServer {
 
     // Webhook endpoint
     if (url.pathname === "/api/sms/webhook") {
+      // Support GET requests from API Gateway apps (e.g. the mobile app sending ?id=...&status=...&message=...)
       if (method === "GET") {
-        sendJson(res, 200, { ok: true, message: "SMS Webhook endpoint is active. Use POST to submit SMS messages." });
-        return;
+        const qMessage = url.searchParams.get("message") || url.searchParams.get("text") ||
+          url.searchParams.get("body") || url.searchParams.get("sms") || url.searchParams.get("content") || "";
+
+        // If no message in query params, treat as a simple status check
+        if (!qMessage) {
+          sendJson(res, 200, { ok: true, message: "SMS Webhook endpoint is active. Use POST or GET with ?message= to submit SMS messages." });
+          return;
+        }
+
+        // Authenticate secret token from query string for GET requests
+        const qToken = url.searchParams.get("secret") || url.searchParams.get("token") ||
+          req.headers["x-webhook-secret"] || req.headers["authorization"]?.replace(/^Bearer\s+/i, "").trim() || "";
+        if (this.secret) {
+          if (!qToken || !safeTimingCompare(qToken, this.secret)) {
+            sendJson(res, 401, { ok: false, error: "Unauthorized. Invalid or missing secret token." });
+            return;
+          }
+        }
+
+        // Process the SMS message from GET params
+        return await this._processSmsText(qMessage, res);
       }
 
       if (method !== "POST") {
-        sendJson(res, 405, { ok: false, error: "Method not allowed. Use POST." });
+        sendJson(res, 405, { ok: false, error: "Method not allowed. Use POST or GET." });
         return;
       }
 
@@ -195,98 +215,32 @@ class SmsWebhookServer {
         }
       }
 
-      // Extract message text from common forwarder body keys (including mysmsgate.net / android-sms-gateway)
-      const payloadObj = (body.payload && typeof body.payload === "object") ? body.payload : {};
+      // Extract message text from common forwarder body keys (including mysmsgate.net / sms-gate.app / android-sms-gateway)
+      const payloadObj = (body.payload && typeof body.payload === "object" && !Array.isArray(body.payload)) ? body.payload : {};
+      const senderInfo = payloadObj.sender || body.sender || "unknown";
+
+      // Handle batched SMS from sms-gate.app
+      if (Array.isArray(body.payload) && body.payload.length > 0) {
+        console.log(`[SMS Webhook] Processing batched SMS event (${body.payload.length} messages) from device ${body.deviceId || "unknown"}`);
+        let lastResult = null;
+        for (const item of body.payload) {
+          const itemText = item.message || item.text || item.body || "";
+          if (itemText) {
+            lastResult = await this._processSmsText(itemText, null);
+          }
+        }
+        sendJson(res, 200, { ok: true, status: "batch_processed", count: body.payload.length, last: lastResult });
+        return;
+      }
+
       const rawText = body.message || payloadObj.message || body.text || payloadObj.text || body.body || body.content || body.sms || body.raw || "";
       if (!rawText) {
         sendJson(res, 400, { ok: false, error: "Missing message/text in request body." });
         return;
       }
 
-      // Parse SMS text
-      const parsed = parseSms(rawText);
-      if (!parsed || !parsed.ok) {
-        sendJson(res, 200, {
-          ok: false,
-          status: "ignored",
-          reason: "Message is not a recognized wallet transfer SMS.",
-          rawPreview: String(rawText).slice(0, 100),
-        });
-        return;
-      }
-
-      // Record in database
-      const recordResult = this.store.recordSmsTransfer(parsed);
-      if (recordResult.duplicate) {
-        sendJson(res, 200, {
-          ok: true,
-          status: "duplicate_ignored",
-          trxId: parsed.trxId,
-          message: "Transfer already recorded previously.",
-        });
-        return;
-      }
-
-      // Look for pending top-up waiting for this transfer
-      let autoCredited = false;
-      const pendingTopup = this.store.findPendingTopupForSms(
-        parsed.senderPhone,
-        parsed.amountPiasters,
-        new Date().toISOString(),
-        parsed.senderName
-      );
-
-      if (pendingTopup) {
-        try {
-          const claimResult = parsed.paymentMethod === "instapay" || pendingTopup.instructions === "instapay"
-            ? this.store.verifyAndClaimInstaPayTopup(
-                pendingTopup.user_id,
-                pendingTopup.id,
-                parsed.rawSenderName || parsed.senderName || parsed.trxId
-              )
-            : this.store.verifyAndClaimSmsTopup(
-                pendingTopup.user_id,
-                pendingTopup.id,
-                parsed.senderPhone
-              );
-
-          if (claimResult.ok) {
-            autoCredited = true;
-            // Notify user on Telegram
-            if (this.api && pendingTopup.user_id) {
-              const amountEgp = (parsed.amountPiasters / 100).toFixed(2);
-              const balanceEgp = (claimResult.balance / 100).toFixed(2);
-              const senderDetail = parsed.senderName
-                ? `👤 اسم المحوِّل: ${parsed.rawSenderName || parsed.senderName}`
-                : `📱 رقم المحول: ${parsed.senderPhone}`;
-
-              const notification = [
-                "🎉 تم تأكيد استلام تحويلك بنجاح!",
-                "━━━━━━━━━━━━━━━━━━━━━━━━",
-                `💵 المبلغ المضاف: ${amountEgp} جنيه`,
-                senderDetail,
-                `🧾 كود العملية: ${parsed.trxId.replace(/^\w+_/, "")}`,
-                `💰 رصيدك الحالي: ${balanceEgp} جنيه`,
-              ].join("\n");
-
-              this.api.sendMessage(pendingTopup.user_id, notification).catch(() => { });
-            }
-          }
-        } catch (err) {
-          console.error("[SMS Webhook] Auto-credit error:", err.message);
-        }
-      }
-
-      sendJson(res, 200, {
-        ok: true,
-        status: "recorded",
-        trxId: parsed.trxId,
-        amountEgp: parsed.amountEgp,
-        senderPhone: parsed.senderPhone,
-        senderName: parsed.senderName || "",
-        autoCredited,
-      });
-      return;
+      console.log(`[SMS Webhook] Received SMS [Sender: ${senderInfo}]: "${rawText.replace(/\r?\n/g, ' ').slice(0, 80)}"`);
+      return await this._processSmsText(rawText, res);
     }
 
     // Binance Pay Webhook
@@ -341,6 +295,96 @@ class SmsWebhookServer {
     }
 
     sendJson(res, 404, { ok: false, error: "Not found." });
+  }
+
+  // Shared SMS processing logic used by both GET and POST handlers
+  async _processSmsText(rawText, res) {
+    const sendOrReturn = (statusCode, data) => {
+      if (res) sendJson(res, statusCode, data);
+      return data;
+    };
+
+    // Parse SMS text
+    const parsed = parseSms(rawText);
+    if (!parsed || !parsed.ok) {
+      return sendOrReturn(200, {
+        ok: false,
+        status: "ignored",
+        reason: "Message is not a recognized wallet transfer SMS.",
+        rawPreview: String(rawText).slice(0, 100),
+      });
+    }
+
+    // Record in database
+    const recordResult = this.store.recordSmsTransfer(parsed);
+    if (recordResult.duplicate) {
+      return sendOrReturn(200, {
+        ok: true,
+        status: "duplicate_ignored",
+        trxId: parsed.trxId,
+        message: "Transfer already recorded previously.",
+      });
+    }
+
+    // Look for pending top-up waiting for this transfer
+    let autoCredited = false;
+    const pendingTopup = this.store.findPendingTopupForSms(
+      parsed.senderPhone,
+      parsed.amountPiasters,
+      new Date().toISOString(),
+      parsed.senderName
+    );
+
+    if (pendingTopup) {
+      try {
+        const claimResult = parsed.paymentMethod === "instapay" || pendingTopup.instructions === "instapay"
+          ? this.store.verifyAndClaimInstaPayTopup(
+              pendingTopup.user_id,
+              pendingTopup.id,
+              parsed.rawSenderName || parsed.senderName || parsed.trxId
+            )
+          : this.store.verifyAndClaimSmsTopup(
+              pendingTopup.user_id,
+              pendingTopup.id,
+              parsed.senderPhone
+            );
+
+        if (claimResult.ok) {
+          autoCredited = true;
+          // Notify user on Telegram
+          if (this.api && pendingTopup.user_id) {
+            const amountEgp = (parsed.amountPiasters / 100).toFixed(2);
+            const balanceEgp = (claimResult.balance / 100).toFixed(2);
+            const senderDetail = parsed.senderName
+              ? `👤 اسم المحوِّل: ${parsed.rawSenderName || parsed.senderName}`
+              : `📱 رقم المحول: ${parsed.senderPhone}`;
+
+            const notification = [
+              "🎉 تم تأكيد استلام تحويلك بنجاح!",
+              "━━━━━━━━━━━━━━━━━━━━━━━━",
+              `💵 المبلغ المضاف: ${amountEgp} جنيه`,
+              senderDetail,
+              `🧾 كود العملية: ${parsed.trxId.replace(/^\w+_/, "")}`,
+              `💰 رصيدك الحالي: ${balanceEgp} جنيه`,
+            ].join("\n");
+
+            this.api.sendMessage(pendingTopup.user_id, notification).catch(() => { });
+          }
+        }
+      } catch (err) {
+        console.error("[SMS Webhook] Auto-credit error:", err.message);
+      }
+    }
+
+    return sendOrReturn(200, {
+      ok: true,
+      status: "recorded",
+      trxId: parsed.trxId,
+      amountEgp: parsed.amountEgp,
+      senderPhone: parsed.senderPhone,
+      senderName: parsed.senderName || "",
+      autoCredited,
+    });
   }
 }
 
