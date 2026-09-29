@@ -30,6 +30,81 @@ function bootstrapSuperAdmins(store, configuredIds) {
   }
 }
 
+async function autoRegisterCloudSmsGateway(publicDomain) {
+  const user = process.env.SMS_GATEWAY_USER;
+  const pass = process.env.SMS_GATEWAY_PASS;
+  if (!user || !pass || !publicDomain) return;
+
+  const cleanDomain = String(publicDomain).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+  const webhookUrl = `https://${cleanDomain}/api/sms/webhook`;
+  const baseUrl = process.env.SMS_GATEWAY_URL || "https://api.sms-gate.app";
+
+  try {
+    const https = require("https");
+    const auth = Buffer.from(`${user}:${pass}`).toString("base64");
+
+    const listWebhooks = () =>
+      new Promise((resolve) => {
+        const req = https.request(
+          new URL("/3rdparty/v1/webhooks", baseUrl),
+          {
+            method: "GET",
+            headers: { Authorization: `Basic ${auth}`, Accept: "application/json" },
+          },
+          (res) => {
+            let raw = "";
+            res.on("data", (c) => (raw += c));
+            res.on("end", () => {
+              try {
+                resolve(JSON.parse(raw));
+              } catch {
+                resolve([]);
+              }
+            });
+          }
+        );
+        req.on("error", () => resolve([]));
+        req.end();
+      });
+
+    const existing = await listWebhooks();
+    if (Array.isArray(existing) && existing.some((w) => w.url === webhookUrl)) {
+      console.log(`[SMS Gateway] Webhook already registered: ${webhookUrl}`);
+      return;
+    }
+
+    const body = JSON.stringify({ url: webhookUrl, event: "sms:received" });
+    const req = https.request(
+      new URL("/3rdparty/v1/webhooks", baseUrl),
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+          Accept: "application/json",
+        },
+      },
+      (res) => {
+        let raw = "";
+        res.on("data", (c) => (raw += c));
+        res.on("end", () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            console.log(`[SMS Gateway] Successfully registered Cloud Webhook: ${webhookUrl}`);
+          } else {
+            console.log(`[SMS Gateway] Webhook registration notice [${res.statusCode}]: ${raw}`);
+          }
+        });
+      }
+    );
+    req.on("error", (e) => console.warn(`[SMS Gateway] Webhook registration error: ${e.message}`));
+    req.write(body);
+    req.end();
+  } catch (err) {
+    console.warn(`[SMS Gateway] Auto-register error: ${err.message}`);
+  }
+}
+
 function main() {
   const token = process.env.M_AUTOMATION_BOT_TOKEN || process.env.MINOF_AI_STUDIO_BOT_TOKEN;
   if (!token) throw new Error("M_AUTOMATION_BOT_TOKEN is required.");
@@ -67,6 +142,11 @@ function main() {
     smsServer.start().catch((err) => {
       console.warn("[warn] SMS Webhook server failed to start:", err.message);
     });
+
+    const publicDomain = process.env.RAILWAY_PUBLIC_DOMAIN || process.env.PUBLIC_URL;
+    if (publicDomain) {
+      autoRegisterCloudSmsGateway(publicDomain).catch(() => {});
+    }
   }
 
   const cleanup = () => {
