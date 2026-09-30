@@ -25,3 +25,4 @@ node bin/sms-gateway.js register %SERVER_URL%
 echo.
 echo ====================================================================
 pause
+

@@ -101,8 +101,8 @@ function parseSms(message) {
   // ----------------------------------------------------
   // 1. Vodafone Cash (فودافون كاش)
   // ----------------------------------------------------
-  if (text.includes("تم استلام مبلغ") || text.includes("You have received") || text.includes("فودافون كاش") || text.includes("Vodafone Cash")) {
-    const arMatch = text.match(/تم\s+استلام\s+مبلغ\s+([\d,.]+)\s*(?:جنيه|ج\.م|جم)?\s+من\s*(?:رقم)?\s*([0-9+]+)/i);
+  if (text.includes("تم استلام") || text.includes("You have received") || text.includes("فودافون كاش") || text.includes("Vodafone Cash")) {
+    const arMatch = text.match(/تم\s+استلام\s+(?:مبلغ\s+)?([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم)?\s+من\s*(?:رقم)?\s*([0-9+]+)/i);
     const arTrx = text.match(/(?:رقم\s+العملية|العملية|كود\s+العملية|مرجع)[:\s]*([A-Za-z0-9_-]+)/i);
 
     if (arMatch) {
