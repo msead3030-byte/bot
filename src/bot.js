@@ -921,14 +921,14 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       "",
       "📌 خطوات إتمام الشحن والتأكيد بالرقم:",
       "1. قم بتحويل المبلغ المحدد أعلاه بالضبط إلى رقم المحفظة.",
-      "2. بعد إتمام التحويل، **أرسل رقم الهاتف الذي حوّلت منه هنا في المحادثة مباشرة** (أو اضغط على الزر بالأسفل).",
+      "2. بعد إتمام التحويل، **أرسل رقم الهاتف الذي حوّلت منه أو كود العملية** هنا في المحادثة مباشرة (أو اضغط على الزر بالأسفل).",
       "3. سيقوم البوت بمطابقة رسالة الـ SMS وإضافة رصيدك فوراً في ثوانٍ.",
     ];
     await api.sendMessage(chatId, panel("📱 شحن رصيد فوري عبر المحفظة", lines), {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "✅ تم التحويل - تأكيد بالرقم", callback_data: `auto_topup_confirm_phone:${topup.id}` }],
+          [{ text: "✅ تم التحويل - تأكيد بالرقم أو الكود", callback_data: `auto_topup_confirm_phone:${topup.id}` }],
           [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
         ],
       },
@@ -1603,7 +1603,7 @@ async function handleCallback(api, store, superAdmins, query) {
       return;
     }
     store.setState(userId, "auto_topup_sender_phone", { topupId });
-    await safeEditOrSend(api, chatId, messageId, "📱 أرسل الآن رقم المحفظة / الهاتف الذي قمت بالتحويل منه (مثال: 01012345678):", {
+    await safeEditOrSend(api, chatId, messageId, "📱 أرسل الآن رقم المحفظة / الهاتف الذي حوّلت منه أو كود العملية من رسالة التحويل:", {
       reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
     });
     return;

@@ -248,6 +248,8 @@ function migrate(db) {
         }
       }
     }
+    // Reset attempts on pending topups so users aren't locked out after fixes
+    db.prepare("UPDATE topups SET validate_attempts = 0 WHERE status = 'pending'").run();
   } catch {}
 }
 

@@ -489,25 +489,25 @@ class StoreService {
       throw new Error("طلب الشحن هذا لم يعد معلقاً (تم إلغاؤه أو معالجته مسبقاً).");
     }
 
-    if (Number(topup.validate_attempts || 0) >= 5) {
-      throw new Error("تم تجاوز الحد الأقصى للمحاولات (5 محاولات). يرجى التواصل مع الدعم الفني.");
+    if (Number(topup.validate_attempts || 0) >= 20) {
+      throw new Error("تم تجاوز الحد الأقصى للمحاولات. يرجى التواصل مع الدعم الفني.");
     }
 
     const normSender = normalizePhoneNumber(senderPhone);
-    if (!normSender || normSender.length < 10) {
-      throw new Error("يرجى إدخال رقم هاتف محفظة صحيح (مثال: 01012345678).");
+    const cleanRaw = cleanText(senderPhone, 100).replace(/[^\w-]/g, "");
+    if ((!normSender || normSender.length < 10) && (!cleanRaw || cleanRaw.length < 6)) {
+      throw new Error("يرجى إدخال رقم هاتف محفظة صحيح (مثال: 01012345678) أو كود العملية من رسالة التحويل.");
     }
 
-    // Save sender number and increment attempts
+    // Save sender identifier and increment attempts
     this.db.prepare(`
       UPDATE topups
       SET sender_identifier = ?, validate_attempts = validate_attempts + 1, updated_at = ?
       WHERE id = ?
-    `).run(normSender, nowIso(), topup.id);
+    `).run(normSender || cleanRaw, nowIso(), topup.id);
 
     // Look for matching unclaimed SMS transfer:
-    // Window: from (topup_created - 5min) to (topup_created + expiry_minutes)
-    // Full expiry window before and after topup creation
+    // Window: from (topup_created - windowMinutes) to (topup_created + windowMinutes)
     const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
     const minReceivedAt = new Date(new Date(topup.created_at).getTime() - windowMinutes * 60 * 1000).toISOString();
     const maxReceivedAt = new Date(new Date(topup.created_at).getTime() + windowMinutes * 60 * 1000).toISOString();
@@ -516,13 +516,16 @@ class StoreService {
       SELECT * FROM sms_transfers
       WHERE status = 'unclaimed'
         AND claimed_by_user_id IS NULL
-        AND sender_phone = ?
+        AND (
+          (sender_phone != '' AND sender_phone = ?)
+          OR (LENGTH(?) >= 6 AND trx_id LIKE ?)
+        )
         AND amount_piasters = ?
         AND received_at >= ?
         AND received_at <= ?
       ORDER BY id DESC
       LIMIT 1
-    `).get(normSender, topup.amount_piasters, minReceivedAt, maxReceivedAt);
+    `).get(normSender, cleanRaw, `%${cleanRaw}%`, topup.amount_piasters, minReceivedAt, maxReceivedAt);
 
     if (!transfer) {
       this.db.prepare(`
