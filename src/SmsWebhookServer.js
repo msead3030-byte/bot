@@ -162,6 +162,19 @@ class SmsWebhookServer {
       return;
     }
 
+    // Diagnostics endpoint (secured with secret)
+    if (method === "GET" && url.pathname === "/api/sms/diagnostics") {
+      const qToken = url.searchParams.get("secret") || req.headers["x-webhook-secret"] || "";
+      if (this.secret && !safeTimingCompare(qToken, this.secret)) {
+        sendJson(res, 401, { ok: false, error: "Unauthorized" });
+        return;
+      }
+      const recentTransfers = this.store.db.prepare("SELECT id, provider, amount_piasters, sender_phone, sender_name, status, trx_id, received_at FROM sms_transfers ORDER BY id DESC LIMIT 10").all();
+      const recentTopups = this.store.db.prepare("SELECT id, user_id, amount_piasters, payment_method, status, sender_identifier, validate_attempts, last_error, created_at, updated_at FROM topups ORDER BY id DESC LIMIT 10").all();
+      sendJson(res, 200, { ok: true, transfers: recentTransfers, topups: recentTopups });
+      return;
+    }
+
     // Webhook endpoint
     if (url.pathname === "/api/sms/webhook") {
       // Support GET requests from API Gateway apps (e.g. the mobile app sending ?id=...&status=...&message=...)

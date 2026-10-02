@@ -507,9 +507,9 @@ class StoreService {
 
     // Look for matching unclaimed SMS transfer:
     // Window: from (topup_created - 5min) to (topup_created + expiry_minutes)
-    // The -5min buffer handles SMS that arrived slightly before the topup was created
+    // Full expiry window before and after topup creation
     const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
-    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - 5 * 60 * 1000).toISOString();
+    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - windowMinutes * 60 * 1000).toISOString();
     const maxReceivedAt = new Date(new Date(topup.created_at).getTime() + windowMinutes * 60 * 1000).toISOString();
 
     const transfer = this.db.prepare(`
@@ -625,9 +625,8 @@ class StoreService {
     `).run(cleanInput, nowIso(), topup.id);
 
     // Look for matching unclaimed SMS transfer within expiry window:
-    // Window: from (topup_created - 5min) to (topup_created + expiry_minutes)
     const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
-    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - 5 * 60 * 1000).toISOString();
+    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - windowMinutes * 60 * 1000).toISOString();
     const maxReceivedAt = new Date(new Date(topup.created_at).getTime() + windowMinutes * 60 * 1000).toISOString();
 
     const candidates = this.db.prepare(`
@@ -863,11 +862,9 @@ class StoreService {
     const normPhone = normalizePhoneNumber(senderPhone);
     const amount = Number(amountPiasters);
     const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
-    // Look for topups created up to windowMinutes BEFORE the SMS arrived
-    // (topup must be created before or around the same time as the SMS)
+    // Look for topups created within windowMinutes before or after SMS arrival
     const minCreatedAt = new Date(new Date(receivedAt).getTime() - windowMinutes * 60 * 1000).toISOString();
-    // Also accept topups created up to 5 minutes AFTER the SMS (in case of network delays)
-    const maxCreatedAt = new Date(new Date(receivedAt).getTime() + 5 * 60 * 1000).toISOString();
+    const maxCreatedAt = new Date(new Date(receivedAt).getTime() + windowMinutes * 60 * 1000).toISOString();
 
     if (normPhone) {
       // ONLY match if user has already entered their phone number AND it matches the SMS sender_phone

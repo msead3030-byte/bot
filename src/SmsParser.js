@@ -14,13 +14,21 @@ function normalizePhoneNumber(raw) {
   if (!raw) return "";
   const converted = convertArabicNumerals(raw);
   let digits = converted.replace(/\D/g, "");
+  // If starts with 01 and has 11 digits (01xxxxxxxxx)
+  if (digits.startsWith("01") && digits.length === 11) {
+    return digits;
+  }
+  // If starts with 1 and has 10 digits (missing leading zero: 1xxxxxxxxx)
+  if (digits.startsWith("1") && digits.length === 10) {
+    return "0" + digits;
+  }
   // If starts with 20 and has 12 digits (201xxxxxxxxx)
   if (digits.startsWith("201") && digits.length === 12) {
-    digits = "0" + digits.slice(2);
+    return "0" + digits.slice(2);
   }
   // If starts with 00201...
   if (digits.startsWith("00201") && digits.length === 14) {
-    digits = "0" + digits.slice(4);
+    return "0" + digits.slice(4);
   }
   return digits;
 }
@@ -99,49 +107,59 @@ function parseSms(message) {
   if (!text) return null;
 
   // ----------------------------------------------------
-  // 1. Vodafone Cash (فودافون كاش)
+  // 1. Vodafone Cash & Egyptian Mobile Wallets (المحافظ الإلكترونية)
   // ----------------------------------------------------
-  if (text.includes("تم استلام") || text.includes("You have received") || text.includes("فودافون كاش") || text.includes("Vodafone Cash")) {
-    const arMatch = text.match(/تم\s+استلام\s+(?:مبلغ\s+)?([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم)?\s+من\s*(?:رقم)?\s*([0-9+]+)/i);
-    const arTrx = text.match(/(?:رقم\s+العملية|العملية|كود\s+العملية|مرجع)[:\s]*([A-Za-z0-9_-]+)/i);
+  if (
+    text.includes("استلام") ||
+    text.includes("تحويل") ||
+    text.includes("إيداع") ||
+    text.includes("received") ||
+    text.includes("كاش") ||
+    text.includes("Cash") ||
+    text.includes("محفظ")
+  ) {
+    const amountMatch = (
+      text.match(/(?:تم\s+(?:استلام|تحويل|إيداع)|مبلغ|استلام|تحويل|إيداع)\s*(?:مبلغ\s*)?([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم|ج|EGP|LE)?/i) ||
+      text.match(/([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم|EGP|LE)/i) ||
+      text.match(/(?:EGP|LE|جنيه|ج\.م|جم)\s*([\d,.]+)/i)
+    );
 
-    if (arMatch) {
-      const amountPiasters = toPiasters(arMatch[1]);
-      const senderPhone = normalizePhoneNumber(arMatch[2]);
-      const trxId = arTrx ? arTrx[1].replace(/[^\w-]/g, "") : "";
+    const phoneMatch = (
+      text.match(/(?:من|بواسطة|from)\s*(?:رقم\s*|حساب\s*|محفظة\s*)?[:\s]*([0-9+]{10,14})/i) ||
+      text.match(/(01[0125]\d{8})/)
+    );
 
-      if (amountPiasters > 0 && senderPhone && trxId) {
-        return {
-          ok: true,
-          provider: "vodafone_cash",
-          paymentMethod: "wallet",
-          amountPiasters,
-          amountEgp: amountPiasters / 100,
-          senderPhone,
-          senderName: "",
-          trxId: `vf_${trxId}`,
-          rawMessage: text,
-        };
+    const trxMatch = (
+      text.match(/(?:رقم\s+العملية|كود\s+العملية|رقم\s+المعاملة|كود\s+المعاملة|رقم\s+التحويل|كود\s+التحويل|عملية\s+رقم|معاملة\s+رقم|العملية|مرجع(?:\s+العملية)?|المرجع|برقم\s+مرجعي|Transaction\s*ID|Trx\s*ID|Ref(?:erence)?(?:\s+No\.?)?)[:\s#]*([A-Za-z0-9_-]{4,})/i) ||
+      text.match(/\b([A-Z0-9]{8,14})\b/i)
+    );
+
+    if (amountMatch && phoneMatch) {
+      const amountPiasters = toPiasters(amountMatch[1]);
+      const senderPhone = normalizePhoneNumber(phoneMatch[1]);
+      let trxId = trxMatch ? trxMatch[1].replace(/[^\w-]/g, "") : "";
+
+      if (!trxId) {
+        const numMatch = text.match(/\b(\d{6,12})\b/);
+        trxId = numMatch ? numMatch[1] : `${Date.now()}`;
       }
-    }
 
-    const enMatch = text.match(/received\s+([\d,.]+)\s*EGP\s+from\s*([0-9+]+)/i);
-    const enTrx = text.match(/(?:Transaction\s*ID|Trx\s*ID|Ref)[:\s]*([A-Za-z0-9_-]+)/i);
-    if (enMatch) {
-      const amountPiasters = toPiasters(enMatch[1]);
-      const senderPhone = normalizePhoneNumber(enMatch[2]);
-      const trxId = enTrx ? enTrx[1].replace(/[^\w-]/g, "") : "";
+      let provider = "wallet";
+      if (text.includes("فودافون") || text.includes("Vodafone")) provider = "vodafone_cash";
+      else if (text.includes("اورانج") || text.includes("أورانج") || text.includes("Orange")) provider = "orange_cash";
+      else if (text.includes("اتصالات") || text.includes("Etisalat") || text.includes("e&")) provider = "etisalat_cash";
+      else if (text.includes("وي باي") || text.includes("WE Pay") || text.includes("WE pay")) provider = "we_pay";
 
       if (amountPiasters > 0 && senderPhone && trxId) {
         return {
           ok: true,
-          provider: "vodafone_cash",
+          provider,
           paymentMethod: "wallet",
           amountPiasters,
           amountEgp: amountPiasters / 100,
           senderPhone,
           senderName: "",
-          trxId: `vf_${trxId}`,
+          trxId: `${provider === "vodafone_cash" ? "vf" : provider}_${trxId}`,
           rawMessage: text,
         };
       }
