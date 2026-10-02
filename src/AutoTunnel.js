@@ -97,11 +97,15 @@ class AutoTunnelService {
         return alreadyPresent;
       }
 
-      // Remove stale webhooks to prevent duplicate/failed dispatches
+      // Remove only temporary tunnel webhooks (lhr.life / localhost.run / ngrok) to prevent deleting production webhooks
       for (const w of webhooks) {
+        if (w.url && (w.url.includes("railway.app") || w.url.includes("up.railway.app"))) {
+          console.log(`[AutoTunnel] 🛡️ تم الإبقاء على ويب هوك الإنتاج السحابي (Railway): ${w.url}`);
+          continue;
+        }
         try {
           await this.apiRequest("DELETE", `/3rdparty/v1/webhooks/${w.id}`);
-          console.log(`[AutoTunnel] 🧹 تم حذف ويب هوك قديم غير نشط: ${w.id} (${w.url})`);
+          console.log(`[AutoTunnel] 🧹 تم حذف ويب هوك نفق مؤقت قديم: ${w.id} (${w.url})`);
         } catch (e) {
           console.warn(`[AutoTunnel] تحذير أثناء حذف ويب هوك قديم: ${e.message}`);
         }
