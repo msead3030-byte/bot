@@ -170,7 +170,7 @@ class SmsWebhookServer {
         return;
       }
       const recentTransfers = this.store.db.prepare("SELECT id, provider, amount_piasters, sender_phone, sender_name, status, trx_id, received_at FROM sms_transfers ORDER BY id DESC LIMIT 10").all();
-      const recentTopups = this.store.db.prepare("SELECT id, user_id, amount_piasters, payment_method, status, sender_identifier, validate_attempts, last_error, created_at, updated_at FROM topups ORDER BY id DESC LIMIT 10").all();
+      const recentTopups = this.store.db.prepare("SELECT id, user_id, amount_piasters, status, sender_identifier, validate_attempts, last_error, created_at, updated_at FROM topups ORDER BY id DESC LIMIT 10").all();
       sendJson(res, 200, { ok: true, transfers: recentTransfers, topups: recentTopups });
       return;
     }
