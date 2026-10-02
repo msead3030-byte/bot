@@ -33,13 +33,15 @@ function bootstrapSuperAdmins(store, configuredIds) {
 
 async function autoRegisterCloudSmsGateway(publicDomain) {
   const cleanDomain = String(publicDomain).replace(/^https?:\/\//i, "").replace(/\/+$/, "");
-  const webhookUrl = `https://${cleanDomain}/api/sms/webhook`;
+  const baseWebhookUrl = `https://${cleanDomain}/api/sms/webhook`;
   const tunnel = getAutoTunnel({
     port: process.env.PORT || process.env.SMS_WEBHOOK_PORT || 3000,
     user: process.env.SMS_GATEWAY_USER,
     pass: process.env.SMS_GATEWAY_PASS,
     baseUrl: process.env.SMS_GATEWAY_URL,
+    secret: process.env.SMS_WEBHOOK_SECRET || "",
   });
+  const webhookUrl = tunnel._buildWebhookUrl(baseWebhookUrl);
   await tunnel.syncCloudWebhook(webhookUrl);
 }
 
@@ -91,6 +93,7 @@ function main() {
         user: process.env.SMS_GATEWAY_USER,
         pass: process.env.SMS_GATEWAY_PASS,
         baseUrl: process.env.SMS_GATEWAY_URL,
+        secret: process.env.SMS_WEBHOOK_SECRET || "",
       });
       tunnel.start();
     }

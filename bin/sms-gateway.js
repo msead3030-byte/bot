@@ -135,6 +135,14 @@ async function registerWebhook(rawUrl) {
     finalUrl = finalUrl.replace(/\/+$/, "") + "/api/sms/webhook";
   }
 
+  // Append secret as query param if configured (sms-gate.app doesn't support custom headers)
+  const secret = String(process.env.SMS_WEBHOOK_SECRET || "").trim();
+  if (secret) {
+    const separator = finalUrl.includes("?") ? "&" : "?";
+    finalUrl = `${finalUrl}${separator}secret=${encodeURIComponent(secret)}`;
+    console.log(`🔐 سيتم تضمين الـ secret في رابط الـ webhook كـ query parameter.`);
+  }
+
   console.log(`\n⏳ جاري تسجيل الويب هوك على السحاب: ${finalUrl} ...`);
 
   try {

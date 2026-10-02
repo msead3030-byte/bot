@@ -9,11 +9,20 @@ class AutoTunnelService {
     this.user = options.user || process.env.SMS_GATEWAY_USER || "CPHM-B";
     this.pass = options.pass || process.env.SMS_GATEWAY_PASS || "1zrnufhhceepf7";
     this.baseUrl = options.baseUrl || process.env.SMS_GATEWAY_URL || "https://api.sms-gate.app";
+    this.secret = options.secret || process.env.SMS_WEBHOOK_SECRET || "";
     this.sshProcess = null;
     this.currentPublicUrl = "";
     this.registeredWebhookId = "";
     this.isStopping = false;
     this.reconnectTimer = null;
+  }
+
+  // Append secret as query param if set (sms-gate.app doesn't support custom headers)
+  _buildWebhookUrl(baseWebhookUrl) {
+    const cleanSecret = String(this.secret || "").trim();
+    if (!cleanSecret) return baseWebhookUrl;
+    const separator = baseWebhookUrl.includes("?") ? "&" : "?";
+    return `${baseWebhookUrl}${separator}secret=${encodeURIComponent(cleanSecret)}`;
   }
 
   apiRequest(method, path, body = null) {
@@ -69,8 +78,9 @@ class AutoTunnelService {
       const existing = await this.apiRequest("GET", "/3rdparty/v1/webhooks");
       const webhooks = Array.isArray(existing) ? existing : [];
 
-      // Check if already registered
-      const alreadyPresent = webhooks.find((w) => w.url === targetWebhookUrl);
+      // Check if already registered (match by base URL ignoring secret param)
+      const normalizedTarget = targetWebhookUrl.split("?")[0];
+      const alreadyPresent = webhooks.find((w) => w.url === targetWebhookUrl || w.url.split("?")[0] === normalizedTarget);
       if (alreadyPresent) {
         console.log(`[AutoTunnel] ✅ الويب هوك مسجل مسبقاً ونشط: ${targetWebhookUrl} (ID: ${alreadyPresent.id})`);
         this.registeredWebhookId = alreadyPresent.id;
@@ -146,7 +156,8 @@ class AutoTunnelService {
       if (match && !urlDiscovered) {
         urlDiscovered = true;
         this.currentPublicUrl = match[0];
-        const webhookUrl = `${this.currentPublicUrl}/api/sms/webhook`;
+        const rawWebhookUrl = `${this.currentPublicUrl}/api/sms/webhook`;
+        const webhookUrl = this._buildWebhookUrl(rawWebhookUrl);
         await this.syncCloudWebhook(webhookUrl);
       }
     };

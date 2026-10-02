@@ -502,8 +502,11 @@ class StoreService {
     `).run(normSender, nowIso(), topup.id);
 
     // Look for matching unclaimed SMS transfer:
+    // Window: from (topup_created - 5min) to (topup_created + expiry_minutes)
+    // The -5min buffer handles SMS that arrived slightly before the topup was created
     const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
-    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - windowMinutes * 60 * 1000).toISOString();
+    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - 5 * 60 * 1000).toISOString();
+    const maxReceivedAt = new Date(new Date(topup.created_at).getTime() + windowMinutes * 60 * 1000).toISOString();
 
     const transfer = this.db.prepare(`
       SELECT * FROM sms_transfers
@@ -512,9 +515,10 @@ class StoreService {
         AND sender_phone = ?
         AND amount_piasters = ?
         AND received_at >= ?
+        AND received_at <= ?
       ORDER BY id DESC
       LIMIT 1
-    `).get(normSender, topup.amount_piasters, minReceivedAt);
+    `).get(normSender, topup.amount_piasters, minReceivedAt, maxReceivedAt);
 
     if (!transfer) {
       this.db.prepare(`
@@ -617,8 +621,10 @@ class StoreService {
     `).run(cleanInput, nowIso(), topup.id);
 
     // Look for matching unclaimed SMS transfer within expiry window:
+    // Window: from (topup_created - 5min) to (topup_created + expiry_minutes)
     const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
-    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - windowMinutes * 60 * 1000).toISOString();
+    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - 5 * 60 * 1000).toISOString();
+    const maxReceivedAt = new Date(new Date(topup.created_at).getTime() + windowMinutes * 60 * 1000).toISOString();
 
     const candidates = this.db.prepare(`
       SELECT * FROM sms_transfers
@@ -626,8 +632,9 @@ class StoreService {
         AND claimed_by_user_id IS NULL
         AND amount_piasters = ?
         AND received_at >= ?
+        AND received_at <= ?
       ORDER BY id DESC
-    `).all(topup.amount_piasters, minReceivedAt);
+    `).all(topup.amount_piasters, minReceivedAt, maxReceivedAt);
 
     let transfer = null;
     for (const cand of candidates) {
@@ -781,19 +788,38 @@ class StoreService {
     const normPhone = normalizePhoneNumber(senderPhone);
     const amount = Number(amountPiasters);
     const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
+    // Look for topups created up to windowMinutes BEFORE the SMS arrived
+    // (topup must be created before or around the same time as the SMS)
     const minCreatedAt = new Date(new Date(receivedAt).getTime() - windowMinutes * 60 * 1000).toISOString();
+    // Also accept topups created up to 5 minutes AFTER the SMS (in case of network delays)
+    const maxCreatedAt = new Date(new Date(receivedAt).getTime() + 5 * 60 * 1000).toISOString();
 
     if (normPhone) {
-      const byPhone = this.db.prepare(`
+      // Priority 1: exact phone match from user-entered identifier
+      const byPhoneExact = this.db.prepare(`
         SELECT * FROM topups
         WHERE status = 'pending'
           AND sender_identifier = ?
           AND amount_piasters = ?
           AND created_at >= ?
+          AND created_at <= ?
         ORDER BY id DESC
         LIMIT 1
-      `).get(normPhone, amount, minCreatedAt);
-      if (byPhone) return byPhone;
+      `).get(normPhone, amount, minCreatedAt, maxCreatedAt);
+      if (byPhoneExact) return byPhoneExact;
+
+      // Priority 2: any pending topup with matching amount and time window
+      // (user hasn't entered their phone yet but SMS already arrived)
+      const byAmountOnly = this.db.prepare(`
+        SELECT * FROM topups
+        WHERE status = 'pending'
+          AND amount_piasters = ?
+          AND created_at >= ?
+          AND created_at <= ?
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(amount, minCreatedAt, maxCreatedAt);
+      if (byAmountOnly) return byAmountOnly;
     }
 
     if (senderName) {
@@ -802,14 +828,18 @@ class StoreService {
         WHERE status = 'pending'
           AND amount_piasters = ?
           AND created_at >= ?
+          AND created_at <= ?
         ORDER BY id DESC
-      `).all(amount, minCreatedAt);
+      `).all(amount, minCreatedAt, maxCreatedAt);
 
       for (const pt of pendingTopups) {
         if (pt.sender_identifier && isNameMatch(pt.sender_identifier, senderName)) {
           return pt;
         }
       }
+
+      // If no match by identifier, return first pending topup (webhook auto-credit)
+      if (pendingTopups.length > 0) return pendingTopups[0];
     }
 
     return null;
