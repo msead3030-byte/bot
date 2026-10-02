@@ -158,8 +158,18 @@ function parseSms(message) {
     text.includes("IPN") ||
     (text.includes("مرجع") && text.includes("مبلغ"))
   ) {
-    const instapayAmount = text.match(/(?:مبلغ|EGP|جنيه|جم)\s*([\d,.]+)|([\d,.]+)\s*(?:EGP|جم|جنيه)/i);
-    const instapayRef = text.match(/(?:مرجع|Ref|رقم\s+المرجع|كود\s+العملية|Transaction\s*ID)[:\s]*([A-Za-z0-9_-]+)/i);
+    // Amount: match various patterns like "مبلغ 100.00 جنيه مصري" or "100 EGP"
+    const instapayAmount = (
+      text.match(/(?:مبلغ)\s*([\d,.]+)\s*(?:جنيه\s*مصري|جنيه|ج\.م|جم|EGP)/i) ||
+      text.match(/([\d,.]+)\s*(?:جنيه\s*مصري|جنيه|ج\.م|جم|EGP)/i) ||
+      text.match(/(?:EGP|جنيه|جم)\s*([\d,.]+)/i)
+    );
+
+    // Reference: matches "مرجعي 123", "برقم مرجعي 123", "رقم المرجع: 123", "مرجع: 123", "Ref: 123"
+    const instapayRef = (
+      text.match(/(?:برقم\s+مرجعي|رقم\s+مرجعي|رقم\s+المرجع|مرجع\s+العملية|مرجع\s+الدفع|المرجع|مرجع|Ref(?:erence)?(?:\s+No\.?)?)[:\s#]*([A-Za-z0-9_-]{4,})/i) ||
+      text.match(/(?:كود\s+العملية|Transaction\s*ID|رقم\s+العملية|رقم\s+التحويل)[:\s]*([A-Za-z0-9_-]{4,})/i)
+    );
 
     const amtStr = instapayAmount ? (instapayAmount[1] || instapayAmount[2]) : null;
     if (amtStr && instapayRef) {
@@ -170,9 +180,11 @@ function parseSms(message) {
       const phoneMatch = text.match(/من\s*(?:رقم|حساب)?\s*([0-9+]{10,14})/i) || text.match(/(01[0125]\d{8})/);
       const senderPhone = phoneMatch ? normalizePhoneNumber(phoneMatch[1]) : "";
 
-      // Extract sender name if present
+      // Extract sender name: "من محمد احمد" or "from John Doe"
       let senderName = "";
-      const nameMatchAr = text.match(/(?:من|بواسطة|العميل)\s+([\p{L}\s]{3,40}?)(?=\s+(?:عبر|من\s+خلال|مرجع|كود|بمبلغ|لحسابك|بتاريخ|\.|$))/iu);
+      const nameMatchAr = text.match(
+        /(?:من|بواسطة|العميل)\s+([\p{L}\s]{3,40}?)(?=\s+(?:عبر|من\s+خلال|مرجع|كود|بمبلغ|لحسابك|بتاريخ|برقم|\.|,|$))/iu
+      );
       if (nameMatchAr && !/\d/.test(nameMatchAr[1])) {
         senderName = nameMatchAr[1].trim();
       }

@@ -454,6 +454,10 @@ class StoreService {
     return { duplicate: false, transfer };
   }
 
+  getSmsTransferByTrxId(trxId) {
+    return this.db.prepare("SELECT * FROM sms_transfers WHERE trx_id = ?").get(cleanText(trxId, 100)) || null;
+  }
+
   createAutoTopup(userId, amountPiasters, paymentMethod = "wallet", receiverNumber = "") {
     const user = safeTelegramId(userId, "User ID");
     const amount = assertTopupAmount(amountPiasters);
@@ -784,6 +788,77 @@ class StoreService {
     };
   }
 
+  /**
+   * Called by the SMS webhook server to automatically claim a topup when an SMS arrives.
+   * Unlike verifyAndClaimSmsTopup/verifyAndClaimInstaPayTopup, this does NOT increment
+   * validate_attempts since it's an automated background process, not a user action.
+   */
+  autoClaimSmsTopup(pendingTopup, smsTransfer) {
+    const user = safeTelegramId(pendingTopup.user_id, "User ID");
+    const at = nowIso();
+    let claimedTransfer = null;
+
+    this.db.transaction(() => {
+      // Re-fetch to ensure atomicity (no double-credits)
+      const freshTransfer = this.db.prepare(`
+        SELECT * FROM sms_transfers
+        WHERE id = ? AND status = 'unclaimed' AND claimed_by_user_id IS NULL
+      `).get(smsTransfer.id);
+
+      if (!freshTransfer) {
+        throw new Error("هذا التحويل تم استخدامه بالفعل.");
+      }
+
+      const freshTopup = this.getTopup(pendingTopup.id);
+      if (!freshTopup || freshTopup.status !== "pending") {
+        throw new Error("طلب الشحن لم يعد معلقاً.");
+      }
+
+      // 1. Mark transfer as claimed
+      this.db.prepare(`
+        UPDATE sms_transfers
+        SET status = 'claimed', claimed_by_user_id = ?, claimed_topup_id = ?, claimed_at = ?
+        WHERE id = ?
+      `).run(user, pendingTopup.id, at, freshTransfer.id);
+
+      // 2. Mark topup as succeeded + save sender identifier if not already set
+      const newIdentifier = freshTopup.sender_identifier ||
+        freshTransfer.sender_phone ||
+        freshTransfer.sender_name || "";
+      this.db.prepare(`
+        UPDATE topups
+        SET status = 'succeeded', sender_identifier = COALESCE(NULLIF(sender_identifier,''), ?),
+            last_error = '', updated_at = ?
+        WHERE id = ?
+      `).run(newIdentifier, at, pendingTopup.id);
+
+      // 3. Credit ledger (idempotency key prevents double-credit)
+      const noteMethod = smsTransfer.provider === "instapay" ? "إنستاباي" : "فودافون كاش";
+      this.db.prepare(`
+        INSERT INTO ledger (
+          user_id, type, amount_piasters, reference_type, reference_id, idempotency_key, note, created_at
+        ) VALUES (?, 'topup', ?, 'sms_transfer', ?, ?, ?, ?)
+      `).run(
+        user,
+        pendingTopup.amount_piasters,
+        String(freshTransfer.id),
+        `sms_topup:${freshTransfer.trx_id}`,
+        `شحن رصيد آلي عبر ${noteMethod} (${freshTransfer.trx_id})`,
+        at
+      );
+
+      claimedTransfer = freshTransfer;
+    })();
+
+    return {
+      ok: true,
+      transfer: claimedTransfer,
+      topup: this.getTopup(pendingTopup.id),
+      balance: this.balance(user),
+    };
+  }
+
+
   findPendingTopupForSms(senderPhone, amountPiasters, receivedAt = nowIso(), senderName = "") {
     const normPhone = normalizePhoneNumber(senderPhone);
     const amount = Number(amountPiasters);
@@ -808,11 +883,12 @@ class StoreService {
       `).get(normPhone, amount, minCreatedAt, maxCreatedAt);
       if (byPhoneExact) return byPhoneExact;
 
-      // Priority 2: any pending topup with matching amount and time window
+      // Priority 2: pending topup with matching amount and empty sender_identifier
       // (user hasn't entered their phone yet but SMS already arrived)
       const byAmountOnly = this.db.prepare(`
         SELECT * FROM topups
         WHERE status = 'pending'
+          AND (sender_identifier IS NULL OR sender_identifier = '')
           AND amount_piasters = ?
           AND created_at >= ?
           AND created_at <= ?
@@ -838,8 +914,9 @@ class StoreService {
         }
       }
 
-      // If no match by identifier, return first pending topup (webhook auto-credit)
-      if (pendingTopups.length > 0) return pendingTopups[0];
+      // If no match by identifier, match first pending topup where sender_identifier is empty
+      const emptyTopup = pendingTopups.find((pt) => !pt.sender_identifier);
+      if (emptyTopup) return emptyTopup;
     }
 
     return null;

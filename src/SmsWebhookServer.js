@@ -225,8 +225,9 @@ class SmsWebhookServer {
         let lastResult = null;
         for (const item of body.payload) {
           const itemText = item.message || item.text || item.body || "";
+          const itemPhone = item.phoneNumber || item.from || "";
           if (itemText) {
-            lastResult = await this._processSmsText(itemText, null);
+            lastResult = await this._processSmsText(itemText, null, itemPhone);
           }
         }
         sendJson(res, 200, { ok: true, status: "batch_processed", count: body.payload.length, last: lastResult });
@@ -239,8 +240,12 @@ class SmsWebhookServer {
         return;
       }
 
-      console.log(`[SMS Webhook] Received SMS [Sender: ${senderInfo}]: "${rawText.replace(/\r?\n/g, ' ').slice(0, 80)}"`);
-      return await this._processSmsText(rawText, res);
+      // Extract sender phone number if provided by sms-gate.app in payload.phoneNumber
+      // This is the number that SENT the SMS (e.g. Vodafone cash sender number)
+      const senderPhone = payloadObj.phoneNumber || body.phoneNumber || payloadObj.from || body.from || "";
+
+      console.log(`[SMS Webhook] Received SMS [Sender: ${senderInfo}${senderPhone ? ` | Phone: ${senderPhone}` : ""}]: "${rawText.replace(/\r?\n/g, ' ').slice(0, 80)}"`);
+      return await this._processSmsText(rawText, res, senderPhone);
     }
 
     // Binance Pay Webhook
@@ -298,7 +303,7 @@ class SmsWebhookServer {
   }
 
   // Shared SMS processing logic used by both GET and POST handlers
-  async _processSmsText(rawText, res) {
+  async _processSmsText(rawText, res, senderPhone = "") {
     const sendOrReturn = (statusCode, data) => {
       if (res) sendJson(res, statusCode, data);
       return data;
@@ -313,6 +318,14 @@ class SmsWebhookServer {
         reason: "Message is not a recognized wallet transfer SMS.",
         rawPreview: String(rawText).slice(0, 100),
       });
+    }
+
+    // Override senderPhone if not found in SMS text but provided externally (from sms-gate.app payload.phoneNumber)
+    if (!parsed.senderPhone && senderPhone) {
+      const normExternal = normalizePhoneNumber(senderPhone);
+      if (normExternal && normExternal.length >= 10) {
+        parsed.senderPhone = normExternal;
+      }
     }
 
     // Record in database
@@ -337,17 +350,13 @@ class SmsWebhookServer {
 
     if (pendingTopup) {
       try {
-        const claimResult = parsed.paymentMethod === "instapay" || pendingTopup.instructions === "instapay"
-          ? this.store.verifyAndClaimInstaPayTopup(
-              pendingTopup.user_id,
-              pendingTopup.id,
-              parsed.rawSenderName || parsed.senderName || parsed.trxId
-            )
-          : this.store.verifyAndClaimSmsTopup(
-              pendingTopup.user_id,
-              pendingTopup.id,
-              parsed.senderPhone
-            );
+        // Use the transfer already returned from recordSmsTransfer (no extra DB query needed)
+        const smsTransfer = recordResult.transfer;
+        if (!smsTransfer) {
+          throw new Error("SMS transfer record missing after insert.");
+        }
+
+        const claimResult = this.store.autoClaimSmsTopup(pendingTopup, smsTransfer);
 
         if (claimResult.ok) {
           autoCredited = true;
