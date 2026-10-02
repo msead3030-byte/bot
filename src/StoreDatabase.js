@@ -233,6 +233,22 @@ function migrate(db) {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_sms_transfers_name ON sms_transfers(sender_name, amount_piasters, status);
   `);
+
+  // Auto-repair past transfers where receiver phone was mistakenly recorded as sender_phone
+  try {
+    const receiver = String(process.env.AUTO_TOPUP_WALLET_RECEIVER || "01104826670").trim();
+    if (receiver) {
+      const wrongTransfers = db.prepare("SELECT id, raw_message FROM sms_transfers WHERE sender_phone = ? AND status = 'unclaimed'").all(receiver);
+      for (const t of wrongTransfers) {
+        const fromMatch = t.raw_message.match(/(?:من|بواسطة|from)\s*(?:رقم\s*|حساب\s*|محفظة\s*)?[:\s]*([0-9+]{10,14})/i);
+        const allPhones = Array.from(t.raw_message.matchAll(/(01[0125]\d{8})/g)).map((m) => m[1]);
+        const realSender = (fromMatch ? fromMatch[1].replace(/\D/g, "") : null) || allPhones.find((p) => p !== receiver);
+        if (realSender && realSender !== receiver) {
+          db.prepare("UPDATE sms_transfers SET sender_phone = ? WHERE id = ?").run(realSender, t.id);
+        }
+      }
+    }
+  } catch {}
 }
 
 module.exports = {

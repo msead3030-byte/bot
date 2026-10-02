@@ -169,7 +169,7 @@ class SmsWebhookServer {
         sendJson(res, 401, { ok: false, error: "Unauthorized" });
         return;
       }
-      const recentTransfers = this.store.db.prepare("SELECT id, provider, amount_piasters, sender_phone, sender_name, status, trx_id, received_at FROM sms_transfers ORDER BY id DESC LIMIT 10").all();
+      const recentTransfers = this.store.db.prepare("SELECT id, provider, amount_piasters, sender_phone, sender_name, status, trx_id, raw_message, received_at FROM sms_transfers ORDER BY id DESC LIMIT 10").all();
       const recentTopups = this.store.db.prepare("SELECT id, user_id, amount_piasters, status, sender_identifier, validate_attempts, last_error, created_at, updated_at FROM topups ORDER BY id DESC LIMIT 10").all();
       sendJson(res, 200, { ok: true, transfers: recentTransfers, topups: recentTopups });
       return;
@@ -333,10 +333,11 @@ class SmsWebhookServer {
       });
     }
 
-    // Override senderPhone if not found in SMS text but provided externally (from sms-gate.app payload.phoneNumber)
+    // Override senderPhone if not found in SMS text but provided externally (and not equal to receiver SIM)
+    const receiverNum = normalizePhoneNumber(process.env.AUTO_TOPUP_WALLET_RECEIVER || "01104826670");
     if (!parsed.senderPhone && senderPhone) {
       const normExternal = normalizePhoneNumber(senderPhone);
-      if (normExternal && normExternal.length >= 10) {
+      if (normExternal && normExternal.length >= 10 && normExternal !== receiverNum) {
         parsed.senderPhone = normExternal;
       }
     }

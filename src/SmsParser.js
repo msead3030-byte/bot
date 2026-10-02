@@ -124,19 +124,30 @@ function parseSms(message) {
       text.match(/(?:EGP|LE|جنيه|ج\.م|جم)\s*([\d,.]+)/i)
     );
 
-    const phoneMatch = (
-      text.match(/(?:من|بواسطة|from)\s*(?:رقم\s*|حساب\s*|محفظة\s*)?[:\s]*([0-9+]{10,14})/i) ||
-      text.match(/(01[0125]\d{8})/)
-    );
+    // Extract phone: prioritize number following "من" / "from" / "بواسطة"
+    let senderPhone = "";
+    const fromMatch = text.match(/(?:من|بواسطة|from)\s*(?:رقم\s*|حساب\s*|محفظة\s*)?[:\s]*([0-9+]{10,14})/i);
+    if (fromMatch) {
+      senderPhone = normalizePhoneNumber(fromMatch[1]);
+    }
+
+    // Fallback: any Egyptian mobile number in message that is NOT the store's receiver number
+    const receiverNum = normalizePhoneNumber(process.env.AUTO_TOPUP_WALLET_RECEIVER || "01104826670");
+    if (!senderPhone || senderPhone === receiverNum) {
+      const allPhones = Array.from(text.matchAll(/(01[0125]\d{8})/g)).map((m) => m[1]);
+      const otherPhone = allPhones.find((p) => p !== receiverNum);
+      if (otherPhone) {
+        senderPhone = otherPhone;
+      }
+    }
 
     const trxMatch = (
       text.match(/(?:رقم\s+العملية|كود\s+العملية|رقم\s+المعاملة|كود\s+المعاملة|رقم\s+التحويل|كود\s+التحويل|عملية\s+رقم|معاملة\s+رقم|العملية|مرجع(?:\s+العملية)?|المرجع|برقم\s+مرجعي|Transaction\s*ID|Trx\s*ID|Ref(?:erence)?(?:\s+No\.?)?)[:\s#]*([A-Za-z0-9_-]{4,})/i) ||
       text.match(/\b([A-Z0-9]{8,14})\b/i)
     );
 
-    if (amountMatch && phoneMatch) {
+    if (amountMatch && senderPhone) {
       const amountPiasters = toPiasters(amountMatch[1]);
-      const senderPhone = normalizePhoneNumber(phoneMatch[1]);
       let trxId = trxMatch ? trxMatch[1].replace(/[^\w-]/g, "") : "";
 
       if (!trxId) {
