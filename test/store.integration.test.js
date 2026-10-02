@@ -443,5 +443,48 @@ test("auto-credit pending topup when SMS arrives later via webhook", () => {
   }
 });
 
+test("does NOT credit topup until user matches the sender phone number", () => {
+  const { store, cleanup } = fixture();
+  try {
+    store.ensureUser({ id: "99", first_name: "Tariq" });
+
+    // 1. Tariq creates topup of 100 EGP (10000 piasters)
+    const topup = store.createAutoTopup("99", 10000, "wallet", "01104826670");
+    assert.equal(topup.status, "pending");
+    assert.equal(store.balance("99"), 0);
+
+    // 2. Incoming SMS arrives from 01011112222
+    const rawSms = "تم استلام مبلغ 100.00 جنيه من 01011112222 بنجاح في محفظة فودافون كاش. رقم العملية: 9876543210.";
+    const parsed = parseSms(rawSms);
+    assert.ok(parsed);
+
+    const rec = store.recordSmsTransfer(parsed);
+    assert.equal(rec.duplicate, false);
+
+    // 3. Webhook tries to find pending topup: Tariq hasn't entered phone yet -> MUST BE NULL
+    const pending = store.findPendingTopupForSms(parsed.senderPhone, parsed.amountPiasters);
+    assert.equal(pending, null, "Must NOT auto-credit before user enters phone number");
+    assert.equal(store.balance("99"), 0);
+
+    // 4. Tariq enters a WRONG phone number (e.g. 01099999999) -> MUST FAIL
+    const wrongClaim = store.verifyAndClaimSmsTopup("99", topup.id, "01099999999");
+    assert.equal(wrongClaim.ok, false);
+    assert.equal(store.balance("99"), 0);
+
+    // 5. Tariq enters the CORRECT phone number (01011112222) -> MUST SUCCEED
+    const correctClaim = store.verifyAndClaimSmsTopup("99", topup.id, "01011112222");
+    assert.equal(correctClaim.ok, true);
+    assert.equal(store.balance("99"), 10000);
+    assert.equal(correctClaim.topup.status, "succeeded");
+
+    // 6. Another attempt to claim with same transfer must NOT credit twice
+    const doubleClaim = store.verifyAndClaimSmsTopup("99", topup.id, "01011112222");
+    assert.equal(doubleClaim.alreadyCredited, true);
+    assert.equal(store.balance("99"), 10000);
+  } finally {
+    cleanup();
+  }
+});
+
 
 

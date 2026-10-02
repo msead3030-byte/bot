@@ -912,17 +912,17 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
 
   if (state.state === "auto_topup_amount_wallet" || state.state === "auto_topup_amount") {
     const amount = parseMoneyToPiasters(text);
-    store.clearState(userId);
     const receiver = autoTopupReceiver();
     const topup = store.createAutoTopup(userId, amount, "wallet", receiver);
+    store.setState(userId, "auto_topup_sender_phone", { topupId: topup.id });
     const lines = [
       `💵 المبلغ المطلوب تحويله بالضبط: **${formatMoney(topup.amount_piasters)}**`,
       `📱 رقم المحفظة / فودافون كاش: \`${receiver}\``,
       "",
       "📌 خطوات إتمام الشحن والتأكيد بالرقم:",
       "1. قم بتحويل المبلغ المحدد أعلاه بالضبط إلى رقم المحفظة.",
-      "2. بعد إتمام التحويل، اضغط على زر [✅ تم التحويل - تأكيد بالرقم] بالأسفل.",
-      "3. سيطلب منك البوت رقم الهاتف الذي حوّلت منه للتحقق من رسالة الـ SMS وإضافة رصيدك فوراً في ثوانٍ.",
+      "2. بعد إتمام التحويل، **أرسل رقم الهاتف الذي حوّلت منه هنا في المحادثة مباشرة** (أو اضغط على الزر بالأسفل).",
+      "3. سيقوم البوت بمطابقة رسالة الـ SMS وإضافة رصيدك فوراً في ثوانٍ.",
     ];
     await api.sendMessage(chatId, panel("📱 شحن رصيد فوري عبر المحفظة", lines), {
       parse_mode: "Markdown",
@@ -938,17 +938,17 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
 
   if (state.state === "auto_topup_amount_instapay") {
     const amount = parseMoneyToPiasters(text);
-    store.clearState(userId);
     const instapayReceiver = String(process.env.AUTO_TOPUP_INSTAPAY_RECEIVER || process.env.AUTO_TOPUP_WALLET_RECEIVER || "01000000000").trim();
     const topup = store.createAutoTopup(userId, amount, "instapay", instapayReceiver);
+    store.setState(userId, "auto_topup_sender_name", { topupId: topup.id });
     const lines = [
       `💵 المبلغ المطلوب تحويله بالضبط: **${formatMoney(topup.amount_piasters)}**`,
       `⚡ عنوان / رقم إنستاباي (InstaPay): \`${instapayReceiver}\``,
       "",
       "📌 خطوات إتمام الشحن والتأكيد بالاسم:",
       "1. افتح تطبيق إنستاباي وحوّل المبلغ المحدد أعلاه للعنوان المذكور.",
-      "2. بعد إتمام التحويل، اضغط على زر [✅ تم التحويل - تأكيد بالاسم] بالأسفل.",
-      "3. سيطلب منك البوت اسمك المسجل في إنستاباي أو اسم الحساب المحوِّل لمطابقة الإشعار وإضافة رصيدك فوراً.",
+      "2. بعد إتمام التحويل، **أرسل اسمك المسجل في إنستاباي هنا في المحادثة مباشرة** (أو اضغط على الزر بالأسفل).",
+      "3. سيقوم البوت بمطابقة الإشعار وإضافة رصيدك فوراً.",
     ];
     await api.sendMessage(chatId, panel("⚡ شحن رصيد فوري عبر إنستاباي", lines), {
       parse_mode: "Markdown",

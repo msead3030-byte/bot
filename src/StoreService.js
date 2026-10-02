@@ -870,7 +870,7 @@ class StoreService {
     const maxCreatedAt = new Date(new Date(receivedAt).getTime() + 5 * 60 * 1000).toISOString();
 
     if (normPhone) {
-      // Priority 1: exact phone match from user-entered identifier
+      // ONLY match if user has already entered their phone number AND it matches the SMS sender_phone
       const byPhoneExact = this.db.prepare(`
         SELECT * FROM topups
         WHERE status = 'pending'
@@ -882,26 +882,15 @@ class StoreService {
         LIMIT 1
       `).get(normPhone, amount, minCreatedAt, maxCreatedAt);
       if (byPhoneExact) return byPhoneExact;
-
-      // Priority 2: pending topup with matching amount and empty sender_identifier
-      // (user hasn't entered their phone yet but SMS already arrived)
-      const byAmountOnly = this.db.prepare(`
-        SELECT * FROM topups
-        WHERE status = 'pending'
-          AND (sender_identifier IS NULL OR sender_identifier = '')
-          AND amount_piasters = ?
-          AND created_at >= ?
-          AND created_at <= ?
-        ORDER BY id DESC
-        LIMIT 1
-      `).get(amount, minCreatedAt, maxCreatedAt);
-      if (byAmountOnly) return byAmountOnly;
     }
 
     if (senderName) {
+      // ONLY match if user has already entered their name/identifier AND it matches the SMS sender_name
       const pendingTopups = this.db.prepare(`
         SELECT * FROM topups
         WHERE status = 'pending'
+          AND sender_identifier IS NOT NULL
+          AND sender_identifier != ''
           AND amount_piasters = ?
           AND created_at >= ?
           AND created_at <= ?
@@ -909,14 +898,10 @@ class StoreService {
       `).all(amount, minCreatedAt, maxCreatedAt);
 
       for (const pt of pendingTopups) {
-        if (pt.sender_identifier && isNameMatch(pt.sender_identifier, senderName)) {
+        if (isNameMatch(pt.sender_identifier, senderName)) {
           return pt;
         }
       }
-
-      // If no match by identifier, match first pending topup where sender_identifier is empty
-      const emptyTopup = pendingTopups.find((pt) => !pt.sender_identifier);
-      if (emptyTopup) return emptyTopup;
     }
 
     return null;
