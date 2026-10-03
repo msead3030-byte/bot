@@ -643,6 +643,68 @@ test("admin customer log, order log, order search, and refund features", async (
   }
 });
 
+test("Binance Pay top-up displays UID 1221301796 and contact support flow", async () => {
+  const { store, cleanup } = fixture();
+  try {
+    const user = telegramUser("77", "CryptoUser");
+    store.ensureUser(user);
+
+    const api = makeApi();
+    await handleCallback(api, store, new Set(), {
+      id: "cb_binance",
+      data: "auto_topup:binance",
+      from: user,
+      message: { message_id: 50, chat: { id: 77 } },
+    });
+
+    const call = api.calls.find((c) => c.method === "editMessageText");
+    assert.ok(call, "Must edit message to show Binance instructions");
+    assert.ok(call.args[2].includes("1221301796"), "Must contain Binance UID 1221301796");
+    assert.ok(call.args[2].includes("الدعم"), "Must instruct user to contact support");
+  } finally {
+    cleanup();
+  }
+});
+
+test("InstaPay transfer to wallet number is matched automatically by SMS amount and sender name", async () => {
+  const { store, cleanup } = fixture();
+  try {
+    const user = telegramUser("88", "InstaUser");
+    store.ensureUser(user);
+
+    // 1. User initiates InstaPay topup of 250 EGP
+    const topup = store.createAutoTopup("88", 25000, "instapay", "01104826670");
+    assert.equal(topup.amount_piasters, 25000);
+    assert.equal(topup.status, "pending");
+
+    // 2. An SMS arrives from Vodafone Cash receiving a transfer from an InstaPay account (no phone, just name)
+    const rawSms = "تم استلام مبلغ 250.00 جنيه من حسام حسن علي بنجاح في محفظة فودافون كاش. رقم العملية: 5544332211.";
+    const parsed = parseSms(rawSms);
+    assert.ok(parsed, "SMS should be parsed");
+    assert.equal(parsed.amountPiasters, 25000);
+    assert.equal(parsed.senderName, "حسام حسن علي");
+    assert.equal(parsed.paymentMethod, "instapay");
+
+    // Record incoming SMS into store
+    const recordResult = store.recordSmsTransfer(parsed);
+    assert.equal(recordResult.duplicate, false);
+
+    // 3. User verifies by providing their name (e.g. "حسام حسن")
+    const claimResult = store.verifyAndClaimInstaPayTopup("88", topup.id, "حسام حسن");
+    assert.equal(claimResult.ok, true);
+    assert.equal(claimResult.balance, 25000);
+    assert.equal(store.balance("88"), 25000);
+
+    // 4. Repeated claim returns alreadyCredited: true and does not add double balance
+    const repeated = store.verifyAndClaimInstaPayTopup("88", topup.id, "حسام حسن");
+    assert.equal(repeated.ok, true);
+    assert.equal(repeated.alreadyCredited, true);
+    assert.equal(store.balance("88"), 25000);
+  } finally {
+    cleanup();
+  }
+});
+
 
 
 

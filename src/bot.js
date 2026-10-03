@@ -759,10 +759,10 @@ async function showTopupMenu(api, store, chatId, userId, messageId = null) {
       { text: isAr ? "📱 محفظة كاش (تأكيد بالرقم)" : "📱 E-Wallet (Confirm by Phone)", callback_data: "auto_topup:wallet" }
     ]);
     rows.push([
-      { text: isAr ? "⚡ إنستاباي InstaPay (تأكيد بالاسم)" : "⚡ InstaPay (Confirm by Name)", callback_data: "auto_topup:instapay" }
+      { text: isAr ? "⚡ إنستاباي InstaPay (تحويل للمحفظة - تأكيد بالاسم)" : "⚡ InstaPay (Confirm by Name)", callback_data: "auto_topup:instapay" }
     ]);
     rows.push([
-      { text: isAr ? "🪙 Binance Pay (تأكيد تلقائي بالـ USDT)" : "🪙 Binance Pay (USDT)", callback_data: "auto_topup:binance" }
+      { text: isAr ? "🪙 باينانس Binance Pay (تحويل UID)" : "🪙 Binance Pay (Transfer UID)", callback_data: "auto_topup:binance" }
     ]);
   }
 
@@ -1340,18 +1340,21 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
     }
 
     // Fallback if Binance Pay API is not configured
-    const binanceReceiver = String(process.env.MANUAL_BINANCE_RECEIVER || "غير محدد").trim();
+    const binanceReceiver = String(process.env.MANUAL_BINANCE_RECEIVER || "1221301796").trim();
     const lines = [
       `💵 المبلغ المطلوب: **${formatMoney(topup.amount_piasters)}** (${usdtAmount.toFixed(2)} USDT)`,
-      `🆔 معرف باينانس Binance Pay ID: \`${binanceReceiver}\``,
+      `🆔 معرف باينانس Binance UID: \`${binanceReceiver}\``,
       "",
-      "قم بالتحويل عبر Binance Pay ثم تواصل مع الإدارة أو أرسل الإثبات لإضافة الرصيد.",
+      "📌 خطوات الإيداع:",
+      `1. قم بتحويل المبلغ المحدد إلى معرّف باينانس (UID): \`${binanceReceiver}\`.`,
+      "2. بعد إتمام التحويل، **تواصل مباشرة مع الدعم لإضافة الرصيد لحسابك يدوياً**.",
     ];
-    await api.sendMessage(chatId, panel("🪙 شحن عبر Binance Pay", lines), {
+    await api.sendMessage(chatId, panel("🪙 شحن عبر Binance Pay (تحويل UID)", lines), {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
-          [adminContactButton("📞 التواصل مع الدعم")],
+          [adminContactButton("📞 التواصل مع الدعم لإضافة الرصيد")],
+          [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: "topup_select:binance" }],
           [{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }],
         ],
       },
@@ -2068,14 +2071,27 @@ async function handleCallback(api, store, superAdmins, query) {
   }
 
   if (data === "auto_topup:binance") {
-    store.setState(userId, "auto_topup_amount_binance", {});
+    const binanceReceiver = String(process.env.MANUAL_BINANCE_RECEIVER || "1221301796").trim();
     const rate = binancePayClient.getUsdtRate();
-    await safeEditOrSend(api, chatId, messageId, panel("🪙 شحن تلقائي عبر Binance Pay", [
-      "✏️ أرسل مبلغ الرصيد الذي تريد إضافته بالجنيه (مثال: 50 أو 100 أو 500):",
-      `سعر احتساب 1 USDT = ${rate.toFixed(2)} EGP`,
-    ]), {
+    const lines = [
+      `🆔 معرف باينانس Binance UID للدفع: \`${binanceReceiver}\``,
+      `💱 سعر احتساب 1 USDT = ${rate.toFixed(2)} EGP`,
+      "",
+      "📌 خطوات الشحن عبر باينانس Binance Pay:",
+      `1. افتح تطبيق Binance واختر Pay ثم Send/إرسال باستخدام الـ UID: \`${binanceReceiver}\`.`,
+      "2. قم بتحويل قيمة الرصيد المطلوب بـ USDT.",
+      "3. بعد التحويل، **تواصل مباشرة مع الدعم الفني لإضافة الرصيد لحسابك يدوياً** أو اضغط على إرسال إثبات التحويل.",
+    ];
+    await safeEditOrSend(api, chatId, messageId, panel("🪙 شحن رصيد عبر Binance Pay", lines), {
       parse_mode: "Markdown",
-      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
+      reply_markup: {
+        inline_keyboard: [
+          [adminContactButton("📞 التواصل مع الدعم لإضافة الرصيد")],
+          [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: "topup_select:binance" }],
+          [{ text: "🔙 رجوع لطرق الشحن", callback_data: "main:topup" }],
+          [{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }],
+        ],
+      },
     });
     return;
   }

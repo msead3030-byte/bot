@@ -146,7 +146,18 @@ function parseSms(message) {
       text.match(/\b([A-Z0-9]{8,14})\b/i)
     );
 
-    if (amountMatch && senderPhone) {
+    // If no phone number was found (or equals receiver), extract sender name for InstaPay/bank transfer to wallet
+    let senderName = "";
+    if (!senderPhone || senderPhone === receiverNum) {
+      const nameMatch = text.match(
+        /(?:من|بواسطة|from|by)\s+(?:انستاباي\s*(?:بواسطة|\/)?\s*|ipn\s*(?:\/|-)?\s*|حساب\s+بنكي\s*(?:بواسطة|\/)?\s*)?([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully|to|in|wallet|account|via|ref|trx)|\.|,|$)/iu
+      );
+      if (nameMatch && !/\d/.test(nameMatch[1])) {
+        senderName = nameMatch[1].trim();
+      }
+    }
+
+    if (amountMatch && (senderPhone || senderName)) {
       const amountPiasters = toPiasters(amountMatch[1]);
       let trxId = trxMatch ? trxMatch[1].replace(/[^\w-]/g, "") : "";
 
@@ -161,16 +172,21 @@ function parseSms(message) {
       else if (text.includes("اتصالات") || text.includes("Etisalat") || text.includes("e&")) provider = "etisalat_cash";
       else if (text.includes("وي باي") || text.includes("WE Pay") || text.includes("WE pay")) provider = "we_pay";
 
-      if (amountPiasters > 0 && senderPhone && trxId) {
+      const isInsta = !senderPhone || text.includes("إنستاباي") || text.includes("انستاباي") || text.includes("InstaPay") || text.includes("IPN");
+      const paymentMethod = isInsta ? "instapay" : "wallet";
+      const prefix = isInsta ? "insta" : (provider === "vodafone_cash" ? "vf" : provider);
+
+      if (amountPiasters > 0 && trxId) {
         return {
           ok: true,
-          provider,
-          paymentMethod: "wallet",
+          provider: isInsta ? "instapay" : provider,
+          paymentMethod,
           amountPiasters,
           amountEgp: amountPiasters / 100,
-          senderPhone,
-          senderName: "",
-          trxId: `${provider === "vodafone_cash" ? "vf" : provider}_${trxId}`,
+          senderPhone: senderPhone || "",
+          senderName: normalizeSenderName(senderName),
+          rawSenderName: senderName,
+          trxId: `${prefix}_${trxId}`,
           rawMessage: text,
         };
       }
@@ -212,7 +228,7 @@ function parseSms(message) {
       // Extract sender name: "من محمد احمد" or "from John Doe"
       let senderName = "";
       const nameMatchAr = text.match(
-        /(?:من|بواسطة|العميل)\s+([\p{L}\s]{3,40}?)(?=\s+(?:عبر|من\s+خلال|مرجع|كود|بمبلغ|لحسابك|بتاريخ|برقم|\.|,|$))/iu
+        /(?:من|بواسطة|العميل)\s+(?:انستاباي\s*(?:بواسطة|\/)?\s*|ipn\s*(?:\/|-)?\s*|حساب\s+بنكي\s*(?:بواسطة|\/)?\s*)?([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|عبر|من\s+خلال|مرجع|كود|بمبلغ|لحسابك|بتاريخ|برقم|\.|,|$))/iu
       );
       if (nameMatchAr && !/\d/.test(nameMatchAr[1])) {
         senderName = nameMatchAr[1].trim();
