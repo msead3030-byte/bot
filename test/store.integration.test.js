@@ -486,5 +486,163 @@ test("does NOT credit topup until user matches the sender phone number", () => {
   }
 });
 
+test("admin customer log, order log, order search, and refund features", async () => {
+  const { store, cleanup } = fixture();
+  try {
+    const adminId = "100";
+    const merchantId = "200";
+    const clientA = "301";
+    const clientB = "302";
+
+    store.ensureUser({ id: adminId, first_name: "Boss Admin", username: "boss" });
+    store.ensureSuperAdmin(adminId, { displayName: "Boss Admin", addedBy: adminId });
+    store.ensureUser({ id: merchantId, first_name: "Merchant Store", username: "merchant" });
+    store.addMerchant(adminId, merchantId, { displayName: "Store Merchant" });
+    store.ensureUser({ id: clientA, first_name: "Ahmed", last_name: "Ali", username: "ahmed_ali" });
+    store.ensureUser({ id: clientB, first_name: "Mohamed", last_name: "Hassan", username: "mohamed_h" });
+
+    // 1. Credit clients
+    store.adminCreditUser(adminId, clientA, 50000, "Initial deposit A"); // 500 EGP
+    store.adminCreditUser(adminId, clientA, 25000, "Second deposit A"); // 250 EGP
+    store.adminCreditUser(adminId, clientB, 30000, "Initial deposit B"); // 300 EGP
+
+    assert.equal(store.balance(clientA), 75000);
+    assert.equal(store.balance(clientB), 30000);
+
+    // 2. Create products
+    const readyProd = store.createProduct(merchantId, {
+      title: "Netflix 1 Month",
+      category: "Streaming",
+      pricePiasters: 20000, // 200 EGP
+      fulfillmentType: "ready_stock",
+      status: "active",
+    });
+    store.addStock(merchantId, readyProd.id, ["NETFLIX-CODE-1", "NETFLIX-CODE-2"]);
+
+    const assistProd = store.createProduct(merchantId, {
+      title: "ChatGPT Plus Upgrade",
+      category: "AI",
+      pricePiasters: 40000, // 400 EGP
+      fulfillmentType: "assisted",
+      status: "active",
+    });
+
+    // 3. Client A purchases ready product and assisted product
+    const order1 = store.purchase(clientA, readyProd.id);
+    assert.equal(order1.ok, true);
+    assert.equal(order1.order.status, "completed");
+
+    const order2 = store.purchase(clientA, assistProd.id, { userInput: "user@example.com / pass123" });
+    assert.equal(order2.ok, true);
+    assert.equal(order2.order.status, "awaiting_delivery");
+
+    // Client A balance: 75000 - 20000 - 40000 = 15000 (150 EGP)
+    assert.equal(store.balance(clientA), 15000);
+
+    // 4. Verify listCustomers
+    const { total, customers } = store.listCustomers();
+    assert.equal(total >= 2, true);
+    const foundA = customers.find((c) => c.telegram_id === clientA);
+    assert.ok(foundA);
+    assert.equal(foundA.total_recharged, 75000);
+    assert.equal(foundA.current_balance, 15000);
+    assert.equal(foundA.order_count, 2);
+    assert.equal(foundA.total_spent, 60000);
+
+    // Test search in listCustomers
+    const searchRes = store.listCustomers({ search: "ahmed_ali" });
+    assert.equal(searchRes.total, 1);
+    assert.equal(searchRes.customers[0].telegram_id, clientA);
+
+    // 5. Verify getCustomerDetails
+    const detailsA = store.getCustomerDetails(clientA);
+    assert.equal(detailsA.balance, 15000);
+    assert.equal(detailsA.total_recharged, 75000);
+    assert.equal(detailsA.total_spent, 60000);
+    assert.equal(detailsA.order_count, 2);
+    assert.equal(detailsA.recentOrders.length, 2);
+    assert.equal(detailsA.recentDeposits.length, 2);
+
+    // 6. Verify listAllOrders
+    const allOrders = store.listAllOrders({ status: "all" });
+    assert.equal(allOrders.total >= 2, true);
+
+    const pendingOrders = store.listAllOrders({ status: "awaiting_delivery" });
+    assert.equal(pendingOrders.total >= 1, true);
+    assert.equal(pendingOrders.orders[0].id, order2.order.id);
+
+    // 7. Verify searchOrder
+    // By ID
+    const foundById = store.searchOrder(String(order2.order.id));
+    assert.ok(foundById);
+    assert.equal(foundById.id, order2.order.id);
+    assert.equal(foundById.user_input_text, "user@example.com / pass123");
+
+    // By #ID
+    const foundByHashId = store.searchOrder(`#${order2.order.id}`);
+    assert.ok(foundByHashId);
+    assert.equal(foundByHashId.id, order2.order.id);
+
+    // By Ref
+    const foundByRef = store.searchOrder(order1.order.order_ref);
+    assert.ok(foundByRef);
+    assert.equal(foundByRef.id, order1.order.id);
+
+    // 8. Admin Refund order2 (assisted order)
+    const refundResult = store.adminRefundOrder(adminId, order2.order.id, "Testing admin refund");
+    assert.equal(refundResult.refunded, true);
+    assert.equal(refundResult.order.status, "cancelled");
+    // Client A balance was 15000 + 40000 = 55000 (550 EGP)
+    assert.equal(refundResult.newBalance, 55000);
+    assert.equal(store.balance(clientA), 55000);
+
+    // Double refund must throw
+    assert.throws(() => store.adminRefundOrder(adminId, order2.order.id), /ملغي ومسترجع/);
+
+    // 9. Test Bot UI callbacks
+    const api = makeApi();
+    const superAdmins = new Set([adminId]);
+
+    // Test admin:customers callback
+    await handleCallback(api, store, superAdmins, {
+      id: "cb_1",
+      data: "admin:customers:0",
+      from: telegramUser(adminId, "Boss"),
+      message: { message_id: 11, chat: { id: Number(adminId) } },
+    });
+    assert.ok(api.calls.some((c) => c.method === "editMessageText" && c.args[2].includes("سجل العملاء والأرصدة")));
+
+    // Test admin:customer_view callback
+    await handleCallback(api, store, superAdmins, {
+      id: "cb_2",
+      data: `admin:customer_view:${clientA}`,
+      from: telegramUser(adminId, "Boss"),
+      message: { message_id: 12, chat: { id: Number(adminId) } },
+    });
+    assert.ok(api.calls.some((c) => c.method === "editMessageText" && c.args[2].includes("ملف العميل")));
+
+    // Test admin:orders callback
+    await handleCallback(api, store, superAdmins, {
+      id: "cb_3",
+      data: "admin:orders:all:0",
+      from: telegramUser(adminId, "Boss"),
+      message: { message_id: 13, chat: { id: Number(adminId) } },
+    });
+    assert.ok(api.calls.some((c) => c.method === "editMessageText" && c.args[2].includes("سجل جميع الطلبات")));
+
+    // Test admin:order_view callback
+    await handleCallback(api, store, superAdmins, {
+      id: "cb_4",
+      data: `admin:order_view:${order1.order.id}`,
+      from: telegramUser(adminId, "Boss"),
+      message: { message_id: 14, chat: { id: Number(adminId) } },
+    });
+    assert.ok(api.calls.some((c) => c.method === "editMessageText" && c.args[2].includes("تفاصيل الطلب")));
+  } finally {
+    cleanup();
+  }
+});
+
+
 
 

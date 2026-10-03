@@ -278,15 +278,41 @@ function adminKeyboard(isSuperAdmin = false, isMaintenance = false) {
     [{ text: "⏳ الطلبات المعلقة", callback_data: "merchant:orders" }, { text: "📊 تقارير الأرباح", callback_data: "merchant:reports" }],
   ];
   if (isSuperAdmin) {
-    rows.push([{ text: "👤 إضافة تاجر", callback_data: "admin:add_merchant" }, { text: "🛡️ إضافة أدمن", callback_data: "admin:add_admin" }]);
-    rows.push([{ text: "👥 جميع التجار", callback_data: "admin:merchants" }, { text: "🛡️ جميع الأدمنز", callback_data: "admin:admins" }]);
-    rows.push([{ text: "➖ إزالة تاجر", callback_data: "admin:remove_merchant" }, { text: "⛔ إزالة أدمن", callback_data: "admin:remove_admin" }]);
-    rows.push([{ text: "💵 إضافة رصيد", callback_data: "admin:credit" }, { text: "🔄 تصفير رصيد", callback_data: "admin:zero" }]);
-    rows.push([{ text: "👥 الأعضاء", callback_data: "admin:members" }, { text: "🌐 تقرير المنصة الشامل", callback_data: "admin:report" }]);
-    rows.push([{ text: "🏷️ تحديد سعر خاص لزبون", callback_data: "admin:custom_price" }]);
-    rows.push([{ text: "📢 إرسال رسالة جماعية", callback_data: "admin:broadcast" }]);
-    rows.push([{ text: "📱 سجل رسائل التحويل SMS", callback_data: "admin:sms_transfers" }]);
-    rows.push([{ text: isMaintenance ? "▶️ إيقاف وضع الصيانة (تفعيل البوت)" : "🛠️ تفعيل وضع الصيانة (إيقاف البوت)", callback_data: "admin:toggle_maintenance" }]);
+    rows.push([
+      { text: "👥 سجل العملاء والأرصدة", callback_data: "admin:customers:0" },
+      { text: "📦 سجل جميع الطلبات", callback_data: "admin:orders:all:0" }
+    ]);
+    rows.push([
+      { text: "🔍 بحث برقم الأوردر", callback_data: "admin:search_order" },
+      { text: "🔍 بحث عن عميل", callback_data: "admin:search_customer" }
+    ]);
+    rows.push([
+      { text: "💵 إضافة رصيد", callback_data: "admin:credit" },
+      { text: "🔄 تصفير رصيد", callback_data: "admin:zero" }
+    ]);
+    rows.push([
+      { text: "🏷️ تحديد سعر خاص لزبون", callback_data: "admin:custom_price" },
+      { text: "🌐 تقرير المنصة الشامل", callback_data: "admin:report" }
+    ]);
+    rows.push([
+      { text: "👤 إضافة تاجر", callback_data: "admin:add_merchant" },
+      { text: "🛡️ إضافة أدمن", callback_data: "admin:add_admin" }
+    ]);
+    rows.push([
+      { text: "👥 جميع التجار", callback_data: "admin:merchants" },
+      { text: "🛡️ جميع الأدمنز", callback_data: "admin:admins" }
+    ]);
+    rows.push([
+      { text: "➖ إزالة تاجر", callback_data: "admin:remove_merchant" },
+      { text: "⛔ إزالة أدمن", callback_data: "admin:remove_admin" }
+    ]);
+    rows.push([
+      { text: "📢 إرسال رسالة جماعية", callback_data: "admin:broadcast" },
+      { text: "📱 سجل رسائل التحويل SMS", callback_data: "admin:sms_transfers" }
+    ]);
+    rows.push([
+      { text: isMaintenance ? "▶️ إيقاف وضع الصيانة (تفعيل البوت)" : "🛠️ تفعيل وضع الصيانة (إيقاف البوت)", callback_data: "admin:toggle_maintenance" }
+    ]);
   }
   rows.push([{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }]);
   return { inline_keyboard: rows };
@@ -759,15 +785,324 @@ async function showAdmin(api, store, superAdmins, chatId, userId, messageId = nu
     await safeEditOrSend(api, chatId, messageId, panel("🚫 وصول غير مصرح", ["هذه المنطقة مخصصة للإدارة والطاقم فقط."]), { reply_markup: homeKeyboard(false) });
     return;
   }
-  const stats = store.merchantStats(userId);
   const isMaint = store.getMaintenanceMode();
-  await safeEditOrSend(api, chatId, messageId, panel("⚙️ لوحة الإدارة والتحكم", [
-    `📦 عدد منتجاتك: ${stats.product_count || 0}`,
-    `🛍️ إجمالي الطلبات: ${stats.order_count || 0}`,
-    `⏳ طلبات قيد التسليم: ${stats.pending_delivery || 0}`,
-    `💵 إجمالي الإيرادات: ${formatMoney(stats.gross_piasters || 0)}`,
-    isMaint ? "⚠️ وضع الصيانة مفعل حالياً (البوت متوقف بالنسبة للمستخدمين)" : "🟢 البوت يعمل حالياً لجميع المستخدمين",
-  ]), { reply_markup: adminKeyboard(stf.isSuperAdmin, isMaint) });
+  let lines = [];
+  if (stf.isSuperAdmin) {
+    const pStats = store.platformStats();
+    lines = [
+      `👥 **الأعضاء:** ${pStats.users} عضو  |  👤 **التجار:** ${pStats.merchants}`,
+      `📦 **المنتجات:** ${pStats.products}  |  🛍️ **الطلبات:** ${pStats.orders}`,
+      `⏳ **طلبات قيد التسليم:** ${pStats.pending}  |  ✅ **مكتملة:** ${pStats.completed || 0}`,
+      `💵 **إجمالي المبيعات:** ${formatMoney(pStats.gross)}`,
+      `💰 **أرصدة محافظ العملاء:** ${formatMoney(pStats.totalUserBalances)}`,
+      `📥 **إجمالي المبالغ المشحونة:** ${formatMoney(pStats.totalRecharged)}`,
+      "",
+      isMaint ? "⚠️ وضع الصيانة مفعل (البوت متوقف للمستخدمين)" : "🟢 البوت يعمل حالياً لجميع المستخدمين",
+    ];
+  } else {
+    const stats = store.merchantStats(userId);
+    lines = [
+      `📦 عدد منتجاتك: ${stats.product_count || 0}`,
+      `🛍️ إجمالي الطلبات: ${stats.order_count || 0}`,
+      `⏳ طلبات قيد التسليم: ${stats.pending_delivery || 0}`,
+      `💵 إجمالي الإيرادات: ${formatMoney(stats.gross_piasters || 0)}`,
+      "",
+      isMaint ? "⚠️ وضع الصيانة مفعل" : "🟢 البوت يعمل حالياً",
+    ];
+  }
+  await safeEditOrSend(api, chatId, messageId, panel("⚙️ لوحة الإدارة والتحكم الشاملة", lines), {
+    parse_mode: "Markdown",
+    reply_markup: adminKeyboard(stf.isSuperAdmin, isMaint),
+  });
+}
+
+async function showAdminCustomers(api, store, chatId, messageId = null, page = 0, search = "") {
+  const pageSize = 8;
+  const offset = page * pageSize;
+  const { total, customers } = store.listCustomers({ limit: pageSize, offset, search });
+  const totalPages = Math.ceil(total / pageSize) || 1;
+
+  const lines = [
+    `📊 إجمالي العملاء: ${total} عميل ${search ? `(نتائج البحث عن: "${search}")` : ""}`,
+    `📄 الصفحة: ${page + 1} من ${totalPages}`,
+    "",
+  ];
+
+  if (!customers.length) {
+    lines.push(search ? "⚠️ لم يتم العثور على أي عميل يطابق هذا البحث." : "لا يوجد عملاء مسجلون حالياً.");
+  } else {
+    for (const c of customers) {
+      const name = displayName(c);
+      lines.push(`👤 **${escMd(name)}** (ID: \`${c.telegram_id}\`)`);
+      lines.push(`   💳 شحن: **${formatMoney(c.total_recharged)}** | 💰 المتبقي: **${formatMoney(c.current_balance)}**`);
+      lines.push(`   🛍️ طلبات: ${c.order_count} (${formatMoney(c.total_spent)})`);
+      lines.push("   ─────────────────");
+    }
+  }
+
+  const rows = [];
+  for (const c of customers) {
+    const label = `👤 ${displayName(c).slice(0, 18)} (رصيد: ${formatMoney(c.current_balance)})`;
+    rows.push([{ text: label, callback_data: `admin:customer_view:${c.telegram_id}` }]);
+  }
+
+  const nav = [];
+  const searchParam = search ? `:${encodeURIComponent(search)}` : "";
+  if (page > 0) nav.push({ text: "◀️ السابق", callback_data: `admin:customers:${page - 1}${searchParam}` });
+  if (offset + pageSize < total) nav.push({ text: "التالي ▶️", callback_data: `admin:customers:${page + 1}${searchParam}` });
+  if (nav.length) rows.push(nav);
+
+  const searchRow = [{ text: "🔍 بحث عن عميل بالاسم/ID", callback_data: "admin:search_customer" }];
+  if (search) searchRow.push({ text: "🔄 عرض كل العملاء", callback_data: "admin:customers:0" });
+  rows.push(searchRow);
+  rows.push([{ text: "👈 عودة للإدارة", callback_data: "main:admin" }]);
+
+  await safeEditOrSend(api, chatId, messageId, panel("👥 سجل العملاء والأرصدة", lines), {
+    parse_mode: "Markdown",
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
+async function showAdminCustomerView(api, store, chatId, targetUserId, messageId = null) {
+  const cust = store.getCustomerDetails(targetUserId);
+  if (!cust) {
+    await safeEditOrSend(api, chatId, messageId, "⚠️ لم يتم العثور على بيانات هذا العميل.", {
+      reply_markup: { inline_keyboard: [[{ text: "🔙 عودة لسجل العملاء", callback_data: "admin:customers:0" }]] }
+    });
+    return;
+  }
+
+  const lines = [
+    `👤 **الاسم:** ${escMd(displayName(cust))}`,
+    `🆔 **معرف التليجرام ID:** \`${cust.telegram_id}\``,
+    `🔗 **اليوزر:** ${cust.username ? `@${escMd(cust.username)}` : "لا يوجد"}`,
+    `📅 **تاريخ الانضمام:** ${formatDateTime(cust.created_at)}`,
+    `🌐 **اللغة:** ${cust.language === "en" ? "English" : "العربية"}`,
+    "",
+    "💰 **السجل المالي والمحفظة:**",
+    `💳 **إجمالي ما قام بشحنه:** **${formatMoney(cust.total_recharged)}**`,
+    `💵 **الرصيد الحالي المتبقي:** **${formatMoney(cust.balance)}**`,
+    `🛒 **إجمالي المشتريات:** ${formatMoney(cust.total_spent)}`,
+    `🛍️ **إجمالي الطلبات:** ${cust.order_count} طلب`,
+  ];
+
+  if (cust.recentDeposits?.length) {
+    lines.push("");
+    lines.push("📥 **آخر عمليات الشحن:**");
+    for (const d of cust.recentDeposits) {
+      lines.push(`• +${formatMoney(d.amount_piasters)} (${escMd(d.note || d.type)}) - ${formatDateTime(d.created_at)}`);
+    }
+  }
+
+  if (cust.recentOrders?.length) {
+    lines.push("");
+    lines.push("🛍️ **آخر الطلبات:**");
+    for (const o of cust.recentOrders) {
+      const st = o.status === "completed" ? "🟢 مكتمل" : o.status === "awaiting_delivery" ? "⏳ معلق" : "❌ ملغي";
+      lines.push(`• #${o.id} ${escMd(o.product_title)} - ${formatMoney(o.total_piasters)} [${st}]`);
+    }
+  }
+
+  const rows = [
+    [
+      { text: "💵 شحن رصيد له", callback_data: `admin:credit_to:${cust.telegram_id}` },
+      { text: "🔄 تصفير الرصيد", callback_data: `admin:zero_confirm:${cust.telegram_id}` }
+    ],
+    [
+      { text: "🏷️ سعر خاص للعميل", callback_data: `admin:custom_price_to:${cust.telegram_id}` },
+      { text: "📦 طلبات هذا العميل", callback_data: `admin:user_orders:${cust.telegram_id}:0` }
+    ],
+    [
+      { text: "💬 إرسال رسالة مباشرة للعميل", callback_data: `admin:msg_user:${cust.telegram_id}` }
+    ],
+    [
+      { text: "🔙 عودة لسجل العملاء", callback_data: "admin:customers:0" },
+      { text: "👈 لوحة الإدارة", callback_data: "main:admin" }
+    ]
+  ];
+
+  await safeEditOrSend(api, chatId, messageId, panel(`👤 ملف العميل #${cust.telegram_id}`, lines), {
+    parse_mode: "Markdown",
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
+async function showAdminCustomerOrders(api, store, chatId, targetUserId, messageId = null, page = 0) {
+  const pageSize = 8;
+  const user = store.getUser(targetUserId);
+  const userName = user ? displayName(user) : targetUserId;
+  const history = store.listUserPurchaseHistory(targetUserId, 50);
+  const total = history.length;
+  const totalPages = Math.ceil(total / pageSize) || 1;
+  const paged = history.slice(page * pageSize, (page + 1) * pageSize);
+
+  const lines = [
+    `👤 سجل طلبات العميل: **${escMd(userName)}** (ID: \`${targetUserId}\`)`,
+    `📊 إجمالي الطلبات: ${total} طلب`,
+    `📄 الصفحة: ${page + 1} من ${totalPages}`,
+    "",
+  ];
+
+  if (!paged.length) {
+    lines.push("لا توجد طلبات سابقة لهذا العميل.");
+  } else {
+    for (const o of paged) {
+      const st = o.status === "completed" ? "🟢 مكتمل" : o.status === "awaiting_delivery" ? "⏳ معلق" : "❌ ملغي";
+      lines.push(`• **#${o.id}** ${escMd(o.product_title)} - ${formatMoney(o.total_piasters)} [${st}]`);
+      lines.push(`  📅 ${formatDateTime(o.created_at)}`);
+    }
+  }
+
+  const rows = [];
+  for (const o of paged) {
+    rows.push([{ text: `🔍 تفاصيل طلب #${o.id}`, callback_data: `admin:order_view:${o.id}` }]);
+  }
+
+  const nav = [];
+  if (page > 0) nav.push({ text: "◀️ السابق", callback_data: `admin:user_orders:${targetUserId}:${page - 1}` });
+  if ((page + 1) * pageSize < total) nav.push({ text: "التالي ▶️", callback_data: `admin:user_orders:${targetUserId}:${page + 1}` });
+  if (nav.length) rows.push(nav);
+
+  rows.push([
+    { text: "👤 عودة لملف العميل", callback_data: `admin:customer_view:${targetUserId}` },
+    { text: "🔙 سجل العملاء", callback_data: "admin:customers:0" }
+  ]);
+
+  await safeEditOrSend(api, chatId, messageId, panel(`📦 طلبات العميل #${targetUserId}`, lines), {
+    parse_mode: "Markdown",
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
+async function showAdminOrders(api, store, chatId, messageId = null, filter = "all", page = 0) {
+  const pageSize = 8;
+  const offset = page * pageSize;
+  const { total, orders } = store.listAllOrders({ limit: pageSize, offset, status: filter });
+  const totalPages = Math.ceil(total / pageSize) || 1;
+
+  const filterNames = {
+    all: "الكل",
+    awaiting_delivery: "⏳ قيد الانتظار",
+    completed: "🟢 المكتملة",
+    cancelled: "❌ الملغاة"
+  };
+
+  const lines = [
+    `📊 إجمالي الطلبات: ${total} طلب (${filterNames[filter] || filter})`,
+    `📄 الصفحة: ${page + 1} من ${totalPages}`,
+    "",
+  ];
+
+  if (!orders.length) {
+    lines.push("لا توجد طلبات مسجلة ضمن هذا التصنيف.");
+  } else {
+    for (const o of orders) {
+      const statusBadge = o.status === "completed" ? "🟢 مكتمل" : o.status === "awaiting_delivery" ? "⏳ قيد الانتظار" : o.status === "cancelled" ? "❌ ملغي" : o.status;
+      const clientName = o.first_name || (o.username ? `@${o.username}` : o.user_id);
+      lines.push(`🧾 **#${o.id}** • \`${o.order_ref}\``);
+      lines.push(`   📦 ${escMd(o.product_title)} (${formatMoney(o.total_piasters)})`);
+      lines.push(`   👤 ${escMd(clientName)} • ${statusBadge}`);
+      lines.push(`   📅 ${formatDateTime(o.created_at)}`);
+      lines.push("   ─────────────────");
+    }
+  }
+
+  const rows = [];
+  for (const o of orders) {
+    const statusIcon = o.status === "completed" ? "🟢" : o.status === "awaiting_delivery" ? "⏳" : "❌";
+    rows.push([{
+      text: `${statusIcon} #${o.id} ${o.product_title.slice(0, 16)} (${formatMoney(o.total_piasters)})`,
+      callback_data: `admin:order_view:${o.id}`
+    }]);
+  }
+
+  rows.push([
+    { text: filter === "all" ? "🔘 الكل" : "الكل", callback_data: "admin:orders:all:0" },
+    { text: filter === "awaiting_delivery" ? "🔘 ⏳ معلقة" : "⏳ معلقة", callback_data: "admin:orders:awaiting_delivery:0" },
+    { text: filter === "completed" ? "🔘 🟢 مكتملة" : "🟢 مكتملة", callback_data: "admin:orders:completed:0" }
+  ]);
+
+  const nav = [];
+  if (page > 0) nav.push({ text: "◀️ السابق", callback_data: `admin:orders:${filter}:${page - 1}` });
+  if (offset + pageSize < total) nav.push({ text: "التالي ▶️", callback_data: `admin:orders:${filter}:${page + 1}` });
+  if (nav.length) rows.push(nav);
+
+  rows.push([
+    { text: "🔍 بحث برقم الأوردر أو الكود", callback_data: "admin:search_order" },
+    { text: "👈 عودة للإدارة", callback_data: "main:admin" }
+  ]);
+
+  await safeEditOrSend(api, chatId, messageId, panel("📦 سجل جميع الطلبات", lines), {
+    parse_mode: "Markdown",
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
+async function showAdminOrderView(api, store, chatId, orderId, messageId = null) {
+  const order = store.searchOrder(orderId);
+  if (!order) {
+    await safeEditOrSend(api, chatId, messageId, "⚠️ لم يتم العثور على هذا الطلب.", {
+      reply_markup: { inline_keyboard: [[{ text: "🔙 عودة لسجل الطلبات", callback_data: "admin:orders:all:0" }]] }
+    });
+    return;
+  }
+
+  const clientName = order.customer ? displayName(order.customer) : order.user_id;
+  const statusBadge = order.status === "completed" ? "🟢 مكتمل بنجاح" : order.status === "awaiting_delivery" ? "⏳ في انتظار التسليم" : order.status === "cancelled" ? "❌ ملغي ومسترجع" : order.status;
+  const fulfillmentBadge = order.fulfillment_type === "ready_stock" ? "⚡ تسليم فوري (مخزون)" : "🛠️ تسليم بمساعدة البائع";
+
+  const lines = [
+    `🧾 **رقم الطلب:** #${order.id}`,
+    `🔖 **مرجع الأوردر:** \`${order.order_ref}\``,
+    `📦 **المنتج:** ${escMd(order.product_title || `#${order.product_id}`)}`,
+    `📂 **التصنيف:** ${escMd(order.product_category || order.category || "عام")}`,
+    `💵 **السعر الإجمالي:** ${formatMoney(order.total_piasters)}`,
+    `⚡ **نوع التسليم:** ${fulfillmentBadge}`,
+    `📌 **الحالة:** ${statusBadge}`,
+    `📅 **تاريخ الإنشاء:** ${formatDateTime(order.created_at)}`,
+    "",
+    "👤 **بيانات العميل:**",
+    `• الاسم: ${escMd(clientName)}`,
+    `• معرف التليجرام: \`${order.user_id}\``,
+    order.customer?.username ? `• اليوزر: @${escMd(order.customer.username)}` : "",
+    "",
+    `🏪 **التاجر المسؤول:** ${escMd(order.merchant?.display_name || order.merchant_id)}`,
+  ];
+
+  if (order.user_input_text) {
+    lines.push("");
+    lines.push("📝 **بيانات إدخال العميل (طلب الشراء):**");
+    lines.push(`\`\`\`\n${order.user_input_text}\n\`\`\``);
+  }
+
+  if (order.delivery_text) {
+    lines.push("");
+    lines.push("🔑 **كود وبيانات التسليم المسلمة للعميل:**");
+    lines.push(`\`\`\`\n${order.delivery_text}\n\`\`\``);
+  }
+
+  const rows = [];
+  if (order.status === "awaiting_delivery") {
+    rows.push([
+      { text: "📤 تسليم الطلب الآن للعميل", callback_data: `admin:deliver_order:${order.id}` },
+      { text: "❌ إلغاء واسترجاع الرصيد", callback_data: `admin:refund_confirm:${order.id}` }
+    ]);
+  } else if (order.status === "completed") {
+    rows.push([
+      { text: "❌ إلغاء الطلب واسترجاع الرصيد للعميل", callback_data: `admin:refund_confirm:${order.id}` }
+    ]);
+  }
+
+  rows.push([
+    { text: "👤 عرض ملف العميل بالكامل", callback_data: `admin:customer_view:${order.user_id}` },
+    { text: "🔙 عودة لسجل الطلبات", callback_data: "admin:orders:all:0" }
+  ]);
+  rows.push([{ text: "👈 لوحة الإدارة", callback_data: "main:admin" }]);
+
+  await safeEditOrSend(api, chatId, messageId, panel(`🧾 تفاصيل الطلب #${order.id}`, lines), {
+    parse_mode: "Markdown",
+    reply_markup: { inline_keyboard: rows },
+  });
 }
 
 async function notifyStaffAboutAssistedOrder(api, store, superAdmins, result) {
@@ -1325,6 +1660,156 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       `✅ تم الإرسال بنجاح إلى: ${successCount} عضو`,
       `❌ تعذر الإرسال إلى: ${failCount} عضو (أو قام بإيقاف البوت)`,
     ]), { reply_markup: adminKeyboard(true) });
+    return;
+  }
+
+  if (state.state === "admin_search_order") {
+    store.clearState(userId);
+    const order = store.searchOrder(text);
+    if (!order) {
+      await api.sendMessage(chatId, panel("🔍 نتيجة البحث عن الأوردر", [
+        `⚠️ لم يتم العثور على أي أوردر بالرقم أو الكود: "${text}"`,
+        "تأكد من كتابة الرقم بشكل صحيح (مثال: 12 أو #12 أو ORD-...).",
+      ]), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔄 إعادة البحث", callback_data: "admin:search_order" }],
+            [{ text: "📦 سجل جميع الطلبات", callback_data: "admin:orders:all:0" }],
+            [{ text: "👈 لوحة الإدارة", callback_data: "main:admin" }],
+          ],
+        },
+      });
+      return;
+    }
+    await showAdminOrderView(api, store, chatId, order.id);
+    return;
+  }
+
+  if (state.state === "admin_search_customer") {
+    store.clearState(userId);
+    const cleanSearch = text.trim();
+    const { total, customers } = store.listCustomers({ limit: 10, offset: 0, search: cleanSearch });
+    if (!total || !customers.length) {
+      await api.sendMessage(chatId, panel("🔍 نتيجة البحث عن العميل", [
+        `⚠️ لم يتم العثور على أي عميل يطابق: "${cleanSearch}"`,
+        "تأكد من كتابة الـ ID أو اليوزرنيم أو الاسم بشكل صحيح.",
+      ]), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔄 إعادة البحث", callback_data: "admin:search_customer" }],
+            [{ text: "👥 سجل جميع العملاء", callback_data: "admin:customers:0" }],
+            [{ text: "👈 لوحة الإدارة", callback_data: "main:admin" }],
+          ],
+        },
+      });
+      return;
+    }
+
+    if (total === 1) {
+      await showAdminCustomerView(api, store, chatId, customers[0].telegram_id);
+      return;
+    }
+
+    await showAdminCustomers(api, store, chatId, null, 0, cleanSearch);
+    return;
+  }
+
+  if (state.state === "admin_credit_direct") {
+    const targetId = state.data.targetId;
+    const [amountInput, ...noteParts] = String(text || "").trim().split(/\s+/);
+    const creditAmount = parseMoneyToPiasters(amountInput);
+    const noteText = noteParts.join(" ") || "شحن مباشر من الإدارة";
+    const balance = store.adminCreditUser(userId, targetId, creditAmount, noteText);
+    store.clearState(userId);
+    await api.sendMessage(chatId, panel("💵 تم إضافة الرصيد بنجاح", [
+      `العميل: \`${targetId}\``,
+      `المبلغ المضاف: **${formatMoney(creditAmount)}**`,
+      `رصيده الحالي: **${formatMoney(balance)}**`,
+      `الملاحظة: ${noteText}`,
+    ]), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "👤 عرض ملف العميل", callback_data: `admin:customer_view:${targetId}` }],
+          [{ text: "👈 لوحة الإدارة", callback_data: "main:admin" }],
+        ],
+      },
+    });
+    await api.sendMessage(targetId, panel("💰 تم شحن رصيدك!", [
+      `تم إضافة **${formatMoney(creditAmount)}** إلى محفظتك.`,
+      `رصيدك الحالي: **${formatMoney(balance)}**`,
+      noteText !== "شحن مباشر من الإدارة" ? `ملاحظة: ${noteText}` : "",
+    ]), { parse_mode: "Markdown", reply_markup: homeKeyboard(false) }).catch(() => { });
+    return;
+  }
+
+  if (state.state === "admin_custom_price_direct") {
+    const targetId = state.data.targetId;
+    const [productIdInput, priceInput, ...noteParts] = String(text || "").trim().split(/\s+/);
+    const override = store.setUserPriceOverride(userId, targetId, Number(productIdInput), parseMoneyToPiasters(priceInput), noteParts.join(" "));
+    store.clearState(userId);
+    await api.sendMessage(chatId, panel("🏷️ تم حفظ السعر الخاص للعميل", [
+      `العميل: \`${override.user_id}\``,
+      `المنتج: #${override.product_id}`,
+      `السعر المخصص: **${formatMoney(override.price_piasters)}**`,
+      override.note ? `الملاحظة: ${override.note}` : "",
+    ]), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "👤 عرض ملف العميل", callback_data: `admin:customer_view:${targetId}` }],
+          [{ text: "👈 لوحة الإدارة", callback_data: "main:admin" }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (state.state === "admin_msg_user_direct") {
+    const targetId = state.data.targetId;
+    store.clearState(userId);
+    try {
+      await api.sendMessage(targetId, panel("💬 رسالة من إدارة المتجر", [text]), { reply_markup: homeKeyboard(false) });
+      await api.sendMessage(chatId, panel("✅ تم إرسال الرسالة للعميل", [
+        `العميل: \`${targetId}\``,
+        "تم تسليم الرسالة في المحادثة بنجاح.",
+      ]), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "👤 عرض ملف العميل", callback_data: `admin:customer_view:${targetId}` }],
+            [{ text: "👈 لوحة الإدارة", callback_data: "main:admin" }],
+          ],
+        },
+      });
+    } catch (err) {
+      await api.sendMessage(chatId, `❌ تعذر إرسال الرسالة للعميل (${err.message}). قد يكون قام بحظر البوت.`, {
+        reply_markup: { inline_keyboard: [[{ text: "👤 عودة لملف العميل", callback_data: `admin:customer_view:${targetId}` }]] },
+      });
+    }
+    return;
+  }
+
+  if (state.state === "admin_deliver_order") {
+    const order = store.deliverOrder(userId, state.data.orderId, text);
+    store.clearState(userId);
+    await api.sendMessage(order.user_id, panel("🎉 تم تسليم طلبك!", [
+      `رقم الطلب: #${order.id}`,
+      `المنتج: ${order.product_title}`,
+      "",
+      "🔑 التسليم والنتيجة:",
+      order.delivery_text,
+    ]), { reply_markup: homeKeyboard(false) }).catch(() => { });
+    await api.sendMessage(chatId, panel("✅ تم تسليم الطلب بنجاح", [
+      `الطلب #${order.id} تم تحديثه كمكتمل وتسليمه للعميل بنجاح.`,
+    ]), {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔍 عرض تفاصيل الطلب", callback_data: `admin:order_view:${order.id}` }],
+          [{ text: "🔙 عودة لسجل الطلبات", callback_data: "admin:orders:all:0" }],
+          [{ text: "👈 لوحة الإدارة", callback_data: "main:admin" }],
+        ],
+      },
+    });
     return;
   }
 
@@ -2076,21 +2561,184 @@ async function handleCallback(api, store, superAdmins, query) {
     return;
   }
 
-  if (data === "admin:members" || data.startsWith("admin:members:")) {
-    const page = data.startsWith("admin:members:") ? Number(data.split(":")[2]) : 0;
-    const pageSize = 15;
-    const offset = page * pageSize;
-    const total = store.countUsers();
-    const users = store.listUsers(pageSize, offset);
-    const lines = [`إجمالي الأعضاء المسجلين: ${total} عضو`, `الصفحة ${page + 1} من ${Math.ceil(total / pageSize) || 1}`, ""];
-    for (const user of users) lines.push(`👤 ${displayName(user)} • ${user.telegram_id}`);
-    const navRows = [];
-    const navButtons = [];
-    if (page > 0) navButtons.push({ text: "◀️ السابق", callback_data: `admin:members:${page - 1}` });
-    if (offset + pageSize < total) navButtons.push({ text: "التالي ▶️", callback_data: `admin:members:${page + 1}` });
-    if (navButtons.length) navRows.push(navButtons);
-    navRows.push([{ text: "👈 عودة للإدارة", callback_data: "main:admin" }]);
-    await safeEditOrSend(api, chatId, messageId, panel("👥 قائمة الأعضاء", lines), { reply_markup: { inline_keyboard: navRows } });
+  if (data === "admin:members" || data.startsWith("admin:members:") || data === "admin:customers" || data.startsWith("admin:customers:")) {
+    const parts = data.split(":");
+    const page = Number(parts[2] || 0);
+    const search = parts[3] ? decodeURIComponent(parts[3]) : "";
+    await showAdminCustomers(api, store, chatId, messageId, page, search);
+    return;
+  }
+
+  if (data.startsWith("admin:customer_view:")) {
+    const targetUserId = data.split(":")[2];
+    await showAdminCustomerView(api, store, chatId, targetUserId, messageId);
+    return;
+  }
+
+  if (data === "admin:search_customer") {
+    store.setState(userId, "admin_search_customer", {});
+    await safeEditOrSend(api, chatId, messageId, "🔍 **البحث في سجل العملاء:**\n\nأرسل معرف العميل (Telegram ID) أو يوزر حسابه (@username) أو اسمه:", {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "admin:customers:0" }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("admin:credit_to:")) {
+    const targetId = data.split(":")[2];
+    const user = store.getUser(targetId);
+    store.setState(userId, "admin_credit_direct", { targetId });
+    await safeEditOrSend(api, chatId, messageId, `💵 أرسل المبلغ والملاحظة لشحن رصيد العميل **${user ? displayName(user) : targetId}** (مثال: \`50 شحن\` أو \`100\`):`, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: `admin:customer_view:${targetId}` }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("admin:zero_confirm:")) {
+    const targetId = data.split(":")[2];
+    const user = store.getUser(targetId);
+    const balance = store.balance(targetId);
+    await safeEditOrSend(api, chatId, messageId, panel("⚠️ تأكيد تصفير الرصيد", [
+      `هل أنت متأكد من تصفير رصيد العميل:`,
+      `👤 **${user ? displayName(user) : targetId}** (ID: \`${targetId}\`)`,
+      `💰 الرصيد الحالي: **${formatMoney(balance)}**`,
+      "",
+      "⚠️ هذا الإجراء سيقوم بخصم كامل الرصيد المتبقي وتسجيل قيد تصفير في سجل الحساب.",
+    ]), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ نعم، تصفير الرصيد الآن", callback_data: `admin:zero_do:${targetId}` }],
+          [{ text: "❌ إلغاء وعودة لملف العميل", callback_data: `admin:customer_view:${targetId}` }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (data.startsWith("admin:zero_do:")) {
+    const targetId = data.split(":")[2];
+    store.adminZeroBalance(userId, targetId);
+    await safeEditOrSend(api, chatId, messageId, panel("✅ تم تصفير الرصيد بنجاح", [
+      `تم تصفير رصيد المستخدم \`${targetId}\` بنجاح وأصبح رصيده: 0 ${currencyCode()}`,
+    ]), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "👤 عودة لملف العميل", callback_data: `admin:customer_view:${targetId}` }],
+          [{ text: "👈 لوحة الإدارة", callback_data: "main:admin" }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (data.startsWith("admin:custom_price_to:")) {
+    const targetId = data.split(":")[2];
+    const user = store.getUser(targetId);
+    store.setState(userId, "admin_custom_price_direct", { targetId });
+    await safeEditOrSend(api, chatId, messageId, `🏷️ أرسل: \`رقم_المنتج السعر_الجديد ملاحظة\` لتحديد سعر خاص للعميل **${user ? displayName(user) : targetId}**:\nمثال: \`1 35 سعر الجملة\``, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: `admin:customer_view:${targetId}` }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("admin:msg_user:")) {
+    const targetId = data.split(":")[2];
+    const user = store.getUser(targetId);
+    store.setState(userId, "admin_msg_user_direct", { targetId });
+    await safeEditOrSend(api, chatId, messageId, `💬 أرسل نص الرسالة التي تريد إرسالها للعميل **${user ? displayName(user) : targetId}**:`, {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: `admin:customer_view:${targetId}` }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("admin:user_orders:")) {
+    const parts = data.split(":");
+    const targetId = parts[2];
+    const page = Number(parts[3] || 0);
+    await showAdminCustomerOrders(api, store, chatId, targetId, messageId, page);
+    return;
+  }
+
+  if (data === "admin:orders" || data.startsWith("admin:orders:")) {
+    const parts = data.split(":");
+    const filter = parts[2] || "all";
+    const page = Number(parts[3] || 0);
+    await showAdminOrders(api, store, chatId, messageId, filter, page);
+    return;
+  }
+
+  if (data.startsWith("admin:order_view:")) {
+    const orderId = Number(data.split(":")[2]);
+    await showAdminOrderView(api, store, chatId, orderId, messageId);
+    return;
+  }
+
+  if (data === "admin:search_order") {
+    store.setState(userId, "admin_search_order", {});
+    await safeEditOrSend(api, chatId, messageId, "🔍 **البحث في سجل الطلبات:**\n\nأرسل رقم الطلب (مثال: `12` أو `#12`) أو كود مرجع الطلب (مثال: `ORD-...`):", {
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "admin:orders:all:0" }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("admin:refund_confirm:")) {
+    const orderId = Number(data.split(":")[2]);
+    const order = store.getOrder(orderId);
+    if (!order) throw new Error("الطلب غير موجود.");
+    await safeEditOrSend(api, chatId, messageId, panel("⚠️ تأكيد إلغاء واسترجاع الطلب", [
+      `هل أنت متأكد من إلغاء الطلب **#${order.id}** (${order.product_title})؟`,
+      `💵 سيتم استرجاع مبلغ **${formatMoney(order.total_piasters)}** لمحفظة العميل \`${order.user_id}\` فوراً.`,
+    ]), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ نعم، إلغاء واسترجاع الرصيد", callback_data: `admin:refund_do:${order.id}` }],
+          [{ text: "❌ تراجع وعودة للطلب", callback_data: `admin:order_view:${order.id}` }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (data.startsWith("admin:refund_do:")) {
+    const orderId = Number(data.split(":")[2]);
+    const result = store.adminRefundOrder(userId, orderId);
+    await api.sendMessage(result.order.user_id, panel("💰 تم استرجاع رصيد الطلب", [
+      `تم إلغاء الطلب #${result.order.id} (${result.order.product_title}) بواسطة الإدارة.`,
+      `💵 تم إعادة مبلغ **${formatMoney(result.order.total_piasters)}** إلى محفظتك بنجاح.`,
+      `💰 رصيدك الحالي: **${formatMoney(result.newBalance)}**`,
+    ]), { parse_mode: "Markdown", reply_markup: homeKeyboard(false) }).catch(() => { });
+
+    await safeEditOrSend(api, chatId, messageId, panel("✅ تم إلغاء الطلب واسترجاع الرصيد", [
+      `الطلب: #${result.order.id}`,
+      `العميل: \`${result.order.user_id}\``,
+      `المبلغ المسترجع: ${formatMoney(result.order.total_piasters)}`,
+      `رصيد العميل بعد الاسترجاع: ${formatMoney(result.newBalance)}`,
+    ]), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔍 عرض تفاصيل الطلب", callback_data: `admin:order_view:${result.order.id}` }],
+          [{ text: "🔙 عودة لسجل الطلبات", callback_data: "admin:orders:all:0" }],
+          [{ text: "👈 لوحة الإدارة", callback_data: "main:admin" }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (data.startsWith("admin:deliver_order:")) {
+    const orderId = Number(data.split(":")[2]);
+    store.setState(userId, "admin_deliver_order", { orderId });
+    await safeEditOrSend(api, chatId, messageId, `📤 أرسل كود أو بيانات التسليم للطلب #${orderId} ليتم إرسالها فوراً للعميل كمكتمل:`, {
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: `admin:order_view:${orderId}` }]] },
+    });
     return;
   }
 
@@ -2116,14 +2764,21 @@ async function handleCallback(api, store, superAdmins, query) {
 
   if (data === "admin:report") {
     const stats = store.platformStats();
-    await safeEditOrSend(api, chatId, messageId, panel("🌐 تقرير المنصة الشامل", [
-      `👥 الأعضاء: ${stats.users}`,
-      `👤 التجار: ${stats.merchants}`,
-      `📦 المنتجات: ${stats.products}`,
-      `🛍️ إجمالي الطلبات: ${stats.orders}`,
-      `⏳ المعلقة: ${stats.pending}`,
-      `💵 إجمالي التداولات: ${formatMoney(stats.gross)}`,
-    ]), { reply_markup: adminKeyboard(true) });
+    await safeEditOrSend(api, chatId, messageId, panel("🌐 تقرير المنصة الشامل والأداء المالي", [
+      `👥 **إجمالي الأعضاء:** ${stats.users} عضو`,
+      `👤 **التجار النشطين:** ${stats.merchants} تاجر`,
+      `📦 **المنتجات المعروضة:** ${stats.products} منتج`,
+      `🛍️ **إجمالي الطلبات:** ${stats.orders} طلب`,
+      `⏳ **طلبات قيد التسليم:** ${stats.pending} طلب`,
+      `✅ **الطلبات المكتملة:** ${stats.completed || 0} طلب`,
+      "────────────────────────",
+      `💵 **إجمالي المبيعات (Gross):** ${formatMoney(stats.gross)}`,
+      `📥 **إجمالي المبالغ المشحونة (Deposits):** ${formatMoney(stats.totalRecharged)}`,
+      `💰 **إجمالي الأرصدة في محافظ العملاء:** ${formatMoney(stats.totalUserBalances)}`,
+    ]), {
+      parse_mode: "Markdown",
+      reply_markup: adminKeyboard(true, store.getMaintenanceMode())
+    });
     return;
   }
 }

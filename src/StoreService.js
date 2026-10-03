@@ -278,6 +278,72 @@ class StoreService {
     `).all(Math.max(1, Math.min(50, Number(limit || 20))), Math.max(0, Number(offset || 0)));
   }
 
+  listCustomers(options = {}) {
+    const limit = Math.max(1, Math.min(50, Number(options.limit || 10)));
+    const offset = Math.max(0, Number(options.offset || 0));
+    const search = cleanText(options.search || "", 100).replace(/^@/, "").toLowerCase();
+
+    let whereClause = "";
+    let params = [];
+    if (search) {
+      whereClause = "WHERE (LOWER(u.telegram_id) LIKE ? OR LOWER(u.username) LIKE ? OR LOWER(u.first_name) LIKE ? OR LOWER(u.last_name) LIKE ?)";
+      const pattern = `%${search}%`;
+      params = [pattern, pattern, pattern, pattern];
+    }
+
+    const countRow = this.db.prepare(`SELECT COUNT(*) AS total FROM users u ${whereClause}`).get(...params);
+    const total = Number(countRow?.total || 0);
+
+    const rows = this.db.prepare(`
+      SELECT 
+        u.telegram_id,
+        u.username,
+        u.first_name,
+        u.last_name,
+        u.language,
+        u.created_at,
+        COALESCE((
+          SELECT SUM(amount_piasters) FROM ledger 
+          WHERE user_id = u.telegram_id AND amount_piasters > 0
+        ), 0) AS total_recharged,
+        COALESCE((
+          SELECT SUM(amount_piasters) FROM ledger 
+          WHERE user_id = u.telegram_id
+        ), 0) AS current_balance,
+        (SELECT COUNT(*) FROM orders WHERE user_id = u.telegram_id) AS order_count,
+        (SELECT COALESCE(SUM(total_piasters), 0) FROM orders WHERE user_id = u.telegram_id AND status != 'cancelled') AS total_spent
+      FROM users u
+      ${whereClause}
+      ORDER BY u.created_at DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset);
+
+    return { total, customers: rows };
+  }
+
+  getCustomerDetails(userId) {
+    const targetId = safeTelegramId(userId, "User ID");
+    const user = this.getUser(targetId);
+    if (!user) return null;
+
+    const balance = this.balance(targetId);
+    const totalRechargedRow = this.db.prepare("SELECT COALESCE(SUM(amount_piasters), 0) AS total FROM ledger WHERE user_id = ? AND amount_piasters > 0").get(targetId);
+    const totalSpentRow = this.db.prepare("SELECT COALESCE(SUM(total_piasters), 0) AS total FROM orders WHERE user_id = ? AND status != 'cancelled'").get(targetId);
+    const ordersCountRow = this.db.prepare("SELECT COUNT(*) AS count FROM orders WHERE user_id = ?").get(targetId);
+    const recentOrders = this.listUserPurchaseHistory(targetId, 5);
+    const recentDeposits = this.userDepositLedger(targetId, 5);
+
+    return {
+      ...user,
+      balance,
+      total_recharged: Number(totalRechargedRow?.total || 0),
+      total_spent: Number(totalSpentRow?.total || 0),
+      order_count: Number(ordersCountRow?.count || 0),
+      recentOrders,
+      recentDeposits,
+    };
+  }
+
   balance(userId) {
     const id = safeTelegramId(userId, "User ID");
     const row = this.db.prepare("SELECT COALESCE(SUM(amount_piasters), 0) AS balance FROM ledger WHERE user_id = ?").get(id);
@@ -302,7 +368,7 @@ class StoreService {
     this.db.prepare(`
       INSERT INTO ledger (user_id, type, amount_piasters, reference_type, reference_id, idempotency_key, note, created_at)
       VALUES (?, 'admin_credit', ?, 'admin', ?, ?, ?, ?)
-    `).run(user, amount, admin, `admin-credit:${admin}:${user}:${at}`, cleanText(note || "Admin credit", 200), at);
+    `).run(user, amount, admin, `admin-credit:${admin}:${user}:${at}:${crypto.randomBytes(4).toString("hex")}`, cleanText(note || "Admin credit", 200), at);
     return this.balance(user);
   }
 
@@ -1312,6 +1378,107 @@ class StoreService {
     `).get(mid, mid, mid, mid);
   }
 
+  listAllOrders(options = {}) {
+    const limit = Math.max(1, Math.min(50, Number(options.limit || 10)));
+    const offset = Math.max(0, Number(options.offset || 0));
+    const status = cleanText(options.status || "", 40);
+
+    let whereClause = "";
+    let params = [];
+    if (status && status !== "all") {
+      whereClause = "WHERE o.status = ?";
+      params.push(status);
+    }
+
+    const countRow = this.db.prepare(`SELECT COUNT(*) AS total FROM orders o ${whereClause}`).get(...params);
+    const total = Number(countRow?.total || 0);
+
+    const rows = this.db.prepare(`
+      SELECT 
+        o.*,
+        p.title AS product_title,
+        p.category AS product_category,
+        u.username,
+        u.first_name,
+        u.last_name
+      FROM orders o
+      LEFT JOIN products p ON p.id = o.product_id
+      LEFT JOIN users u ON u.telegram_id = o.user_id
+      ${whereClause}
+      ORDER BY o.id DESC
+      LIMIT ? OFFSET ?
+    `).all(...params, limit, offset);
+
+    return { total, orders: rows };
+  }
+
+  enrichOrder(order) {
+    if (!order) return null;
+    const customer = this.getUser(order.user_id);
+    const merchant = this.getMerchant(order.merchant_id);
+    return {
+      ...order,
+      customer,
+      merchant,
+    };
+  }
+
+  searchOrder(query) {
+    const q = String(query || "").trim();
+    if (!q) return null;
+
+    // Check if numeric ID (e.g. #123 or 123)
+    const numClean = q.replace(/^#/, "");
+    if (/^\d+$/.test(numClean)) {
+      const order = this.getOrder(Number(numClean));
+      if (order) return this.enrichOrder(order);
+    }
+
+    // Check exact order_ref
+    const exact = this.db.prepare("SELECT id FROM orders WHERE order_ref = ? COLLATE NOCASE").get(q);
+    if (exact) {
+      return this.enrichOrder(this.getOrder(exact.id));
+    }
+
+    // Check partial order_ref
+    const partial = this.db.prepare("SELECT id FROM orders WHERE order_ref LIKE ? ORDER BY id DESC LIMIT 1").get(`%${q}%`);
+    if (partial) {
+      return this.enrichOrder(this.getOrder(partial.id));
+    }
+
+    return null;
+  }
+
+  adminRefundOrder(adminId, orderId, reason = "") {
+    const admin = this.assertSuperAdmin(adminId);
+    const order = this.getOrder(orderId);
+    if (!order) throw new Error("الطلب غير موجود.");
+    if (order.status === "cancelled") throw new Error("الطلب ملغي ومسترجع بالفعل مسبقاً.");
+
+    const at = nowIso();
+    this.db.transaction(() => {
+      this.db.prepare("UPDATE orders SET status = 'cancelled', updated_at = ? WHERE id = ?").run(at, order.id);
+      this.db.prepare(`
+        INSERT INTO ledger (user_id, type, amount_piasters, reference_type, reference_id, idempotency_key, note, created_at)
+        VALUES (?, 'refund', ?, 'order_refund', ?, ?, ?, ?)
+      `).run(
+        order.user_id,
+        order.total_piasters,
+        String(order.id),
+        `order-refund:${order.id}:${at}`,
+        cleanText(reason || `استرجاع رصيد الطلب #${order.id} بواسطة الإدارة`, 200),
+        at
+      );
+      if (order.stock_item_id) {
+        this.db.prepare("UPDATE stock_items SET status = 'available', order_id = NULL, sold_at = NULL, updated_at = ? WHERE id = ?").run(at, order.stock_item_id);
+      }
+    })();
+
+    const freshOrder = this.enrichOrder(this.getOrder(order.id));
+    const newBalance = this.balance(order.user_id);
+    return { order: freshOrder, refunded: true, newBalance };
+  }
+
   platformStats() {
     return {
       users: this.countUsers(),
@@ -1319,7 +1486,10 @@ class StoreService {
       products: this.db.prepare("SELECT COUNT(*) AS c FROM products").get().c,
       orders: this.db.prepare("SELECT COUNT(*) AS c FROM orders").get().c,
       pending: this.db.prepare("SELECT COUNT(*) AS c FROM orders WHERE status = 'awaiting_delivery'").get().c,
+      completed: this.db.prepare("SELECT COUNT(*) AS c FROM orders WHERE status = 'completed'").get().c,
       gross: this.db.prepare("SELECT COALESCE(SUM(total_piasters), 0) AS c FROM orders WHERE status IN ('completed','awaiting_delivery')").get().c,
+      totalRecharged: this.db.prepare("SELECT COALESCE(SUM(amount_piasters), 0) AS c FROM ledger WHERE amount_piasters > 0").get().c,
+      totalUserBalances: this.db.prepare("SELECT COALESCE(SUM(amount_piasters), 0) AS c FROM ledger").get().c,
     };
   }
 
