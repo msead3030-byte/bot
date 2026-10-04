@@ -239,8 +239,9 @@ class SmsWebhookServer {
         for (const item of body.payload) {
           const itemText = item.message || item.text || item.body || "";
           const itemPhone = item.phoneNumber || item.from || "";
+          const itemSender = item.sender || body.sender || "unknown";
           if (itemText) {
-            lastResult = await this._processSmsText(itemText, null, itemPhone);
+            lastResult = await this._processSmsText(itemText, null, itemPhone, itemSender);
           }
         }
         sendJson(res, 200, { ok: true, status: "batch_processed", count: body.payload.length, last: lastResult });
@@ -258,7 +259,7 @@ class SmsWebhookServer {
       const senderPhone = payloadObj.phoneNumber || body.phoneNumber || payloadObj.from || body.from || "";
 
       console.log(`[SMS Webhook] Received SMS [Sender: ${senderInfo}${senderPhone ? ` | Phone: ${senderPhone}` : ""}]: "${rawText.replace(/\r?\n/g, ' ').slice(0, 80)}"`);
-      return await this._processSmsText(rawText, res, senderPhone);
+      return await this._processSmsText(rawText, res, senderPhone, senderInfo);
     }
 
     // Binance Pay Webhook
@@ -316,11 +317,27 @@ class SmsWebhookServer {
   }
 
   // Shared SMS processing logic used by both GET and POST handlers
-  async _processSmsText(rawText, res, senderPhone = "") {
+  async _processSmsText(rawText, res, senderPhone = "", senderInfo = "") {
     const sendOrReturn = (statusCode, data) => {
       if (res) sendJson(res, statusCode, data);
       return data;
     };
+
+    // Anti-Spoofing Protection:
+    // If the forwarder app provided the SMS sender ID (the phone number/sender that transmitted the SMS to the phone),
+    // check if it's a personal Egyptian mobile number.
+    // Official wallet/bank notifications ALWAYS come from alphanumeric IDs (e.g. VF-Cash, EtisalatCash, InstaPay, IPN),
+    // NEVER from a random personal 11-digit mobile SIM card.
+    if (senderInfo) {
+      const normSenderInfo = normalizePhoneNumber(senderInfo);
+      if (normSenderInfo && normSenderInfo.startsWith("01") && normSenderInfo.length === 11) {
+        console.warn(`[SECURITY ALERT] Rejected potential SMS spoofing! SMS claiming to be wallet payment originated from personal mobile SIM: ${senderInfo}`);
+        return sendOrReturn(403, {
+          ok: false,
+          error: "Rejected: SMS originated from a personal mobile SIM card, not an official wallet or bank sender ID.",
+        });
+      }
+    }
 
     // Parse SMS text
     const parsed = parseSms(rawText);

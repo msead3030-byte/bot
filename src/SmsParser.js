@@ -12,25 +12,110 @@ function convertArabicNumerals(str) {
 
 function normalizePhoneNumber(raw) {
   if (!raw) return "";
-  const converted = convertArabicNumerals(raw);
+  const converted = convertArabicNumerals(String(raw).trim());
   let digits = converted.replace(/\D/g, "");
-  // If starts with 01 and has 11 digits (01xxxxxxxxx)
+
+  // Normalize Egyptian international prefixes: 002, +20, 20
+  // e.g. 00201012345678 (14 digits) -> 01012345678
+  if (digits.startsWith("00201") && digits.length === 14) {
+    digits = "0" + digits.slice(4);
+  } else if (digits.startsWith("0021") && digits.length === 13) {
+    digits = "0" + digits.slice(3);
+  } else if (digits.startsWith("002") && digits.length >= 13) {
+    digits = digits.slice(3);
+    if (!digits.startsWith("0")) digits = "0" + digits;
+  } else if (digits.startsWith("2001") && digits.length === 13) {
+    digits = digits.slice(2);
+  } else if (digits.startsWith("201") && digits.length === 12) {
+    digits = "0" + digits.slice(2);
+  } else if (digits.startsWith("1") && digits.length === 10) {
+    digits = "0" + digits;
+  }
+
   if (digits.startsWith("01") && digits.length === 11) {
     return digits;
   }
-  // If starts with 1 and has 10 digits (missing leading zero: 1xxxxxxxxx)
-  if (digits.startsWith("1") && digits.length === 10) {
-    return "0" + digits;
-  }
-  // If starts with 20 and has 12 digits (201xxxxxxxxx)
-  if (digits.startsWith("201") && digits.length === 12) {
-    return "0" + digits.slice(2);
-  }
-  // If starts with 00201...
-  if (digits.startsWith("00201") && digits.length === 14) {
-    return "0" + digits.slice(4);
-  }
   return digits;
+}
+
+// Transliteration dictionary between common Egyptian Arabic names and English spellings
+const ARABIC_TO_LATIN = {
+  "احمد": ["ahmed", "ahmad"],
+  "محمد": ["mohamed", "mohammed", "muhammad", "muhamed", "mohd"],
+  "محمود": ["mahmoud", "mahmood"],
+  "علي": ["ali", "aly"],
+  "حسن": ["hassan", "hasan"],
+  "حسين": ["hussein", "hussien", "hossein"],
+  "ابراهيم": ["ibrahim", "ebrahim"],
+  "مصطفى": ["mostafa", "mustafa"],
+  "عمر": ["omar", "omer"],
+  "عمرو": ["amr"],
+  "خالد": ["khaled", "khalid"],
+  "طارق": ["tarek", "tariq"],
+  "سيد": ["sayed", "saeed"],
+  "جمال": ["gamal", "jamal"],
+  "عادل": ["adel", "adil"],
+  "كريم": ["karim", "kareem"],
+  "حسام": ["hossam", "hosam"],
+  "يوسف": ["youssef", "yosef", "yusuf"],
+  "مينا": ["mina"],
+  "جورج": ["george"],
+  "بيشوي": ["bishoy", "beshoy"],
+  "بيتر": ["peter"],
+  "فادي": ["fady", "fadi"],
+  "هاني": ["hany", "hani"],
+  "وائل": ["wael"],
+  "وليد": ["walid", "waleed"],
+  "ايهاب": ["ehab", "ihab"],
+  "اشرف": ["ashraf"],
+  "سامح": ["sameh"],
+  "ايمن": ["ayman"],
+  "اسلام": ["islam", "eslam"],
+  "اسامه": ["osama", "oussama"],
+  "حمدي": ["hamdy", "hamdi"],
+  "مجدي": ["magdy", "magdi"],
+  "سامي": ["samy", "sami"],
+  "نبيل": ["nabil", "nabeel"],
+  "رضا": ["reda", "redha"],
+  "شريف": ["sherif", "shereef"],
+  "ياسر": ["yasser", "yaser"],
+  "عماد": ["emad", "imad"],
+  "هشام": ["hesham", "hisham"],
+  "حاتم": ["hatem"],
+  "سعيد": ["saeed", "said"],
+  "سمير": ["samir", "sameer"],
+  "عاطف": ["atef"],
+  "صلاح": ["salah"],
+  "علاء": ["alaa"],
+  "مدحت": ["medhat"],
+  "باسم": ["bassem", "basem"],
+  "رامي": ["ramy", "rami"],
+  "هيثم": ["haitham", "haytham"],
+  "مروان": ["marwan"],
+  "سالم": ["salem"],
+  "مساعد": ["mosaad", "mosaed", "musaad"],
+  "كامل": ["kamel", "kamil"],
+  "عبدالله": ["abdallah", "abdullah", "abdalla"],
+  "عبدالرحمن": ["abdelrahman", "abdel-rahman", "abdurrahman"],
+  "عبدالعزيز": ["abdelaziz", "abdel-aziz"],
+  "فتحي": ["fathy", "fathi"],
+  "صبري": ["sabry", "sabri"],
+  "شوقي": ["shawky", "shawki"],
+  "فكري": ["fekry", "fikri"],
+  "بدوي": ["badawy", "badawi"],
+  "عزت": ["ezzat"],
+  "رفعت": ["refaat", "refat"],
+  "شكري": ["shokry", "shoukry"],
+  "جلال": ["galal", "jalal"],
+  "شعبان": ["shaaban"],
+  "رمضان": ["ramadan"]
+};
+
+const LATIN_TO_ARABIC = {};
+for (const [ar, latinList] of Object.entries(ARABIC_TO_LATIN)) {
+  for (const lat of latinList) {
+    LATIN_TO_ARABIC[lat] = ar;
+  }
 }
 
 /**
@@ -39,6 +124,7 @@ function normalizePhoneNumber(raw) {
  * - Unifies yaa forms (ى -> ي)
  * - Unifies taa marbuta (ة -> ه)
  * - Strips tashkeel / diacritics
+ * - Normalizes compound names (عبد الرحمن -> عبدالرحمن)
  * - Normalizes whitespace and casing
  */
 function normalizeSenderName(raw) {
@@ -52,6 +138,9 @@ function normalizeSenderName(raw) {
   name = name.replace(/ة/g, "ه");
   name = name.replace(/ؤ/g, "و");
   name = name.replace(/ئ/g, "ي");
+  // Normalize compound names
+  name = name.replace(/عبد\s+/g, "عبد");
+  name = name.replace(/ابو\s+/g, "ابو");
   // Remove non-alphanumeric except spaces
   name = name.replace(/[^\p{L}\p{N}\s]/gu, " ");
   // Collapse whitespace
@@ -59,9 +148,29 @@ function normalizeSenderName(raw) {
   return name;
 }
 
+function cleanExtractedName(raw) {
+  if (!raw) return "";
+  let name = String(raw).trim();
+  const stopWords = [
+    "انستاباي", "إنستاباي", "انستا باي", "إنستا باي", "انستا", "إنستا", "ipn", "instapay",
+    "محفظة", "محفظتك", "حساب", "حسابك", "بنك", "كاش", "فودافون", "اتصالات", "اورانج", "أورانج", "وي",
+    "عميل", "العميل", "بواسطة", "عبر", "من خلال", "من"
+  ];
+  for (const sw of stopWords) {
+    const reg = new RegExp(`(^|\\s)${sw}(\\s|$)`, "giu");
+    name = name.replace(reg, " ");
+  }
+  name = name.replace(/\s+/g, " ").trim();
+  if (name.length >= 2 && /[\p{L}]/u.test(name)) {
+    return name;
+  }
+  return "";
+}
+
 /**
  * Checks if input sender name matches the candidate name from SMS:
  * e.g. "احمد علي" matches "أحمد علي إبراهيم"
+ * e.g. "أحمد علي" matches "AHMED ALI" (cross-language)
  */
 function isNameMatch(inputName, candidateName) {
   const normInput = normalizeSenderName(inputName);
@@ -78,6 +187,26 @@ function isNameMatch(inputName, candidateName) {
   const inputWords = normInput.split(" ").filter((w) => w.length > 1);
   if (inputWords.length > 0 && inputWords.every((word) => normCandidate.includes(word))) {
     return true;
+  }
+
+  // Cross-lingual matching (Arabic <-> English/Latin)
+  const isInputArabic = /[\u0600-\u06FF]/.test(normInput);
+  const isCandidateArabic = /[\u0600-\u06FF]/.test(normCandidate);
+
+  if (isInputArabic !== isCandidateArabic) {
+    const arabicWords = (isInputArabic ? normInput : normCandidate).split(" ").filter((w) => w.length > 1);
+    const latinWords = (isInputArabic ? normCandidate : normInput).split(" ").filter((w) => w.length > 1);
+
+    const mappedLatinAsArabic = latinWords.map((w) => LATIN_TO_ARABIC[w] || w);
+    const matchedCount = arabicWords.filter((ar) => {
+      if (mappedLatinAsArabic.includes(ar)) return true;
+      const possibleLatin = ARABIC_TO_LATIN[ar] || [];
+      return possibleLatin.some((lat) => latinWords.includes(lat) || latinWords.some((lw) => lw.includes(lat) || lat.includes(lw)));
+    }).length;
+
+    if (matchedCount >= 1 && (matchedCount / arabicWords.length >= 0.5 || matchedCount >= 2)) {
+      return true;
+    }
   }
 
   return false;
@@ -126,15 +255,30 @@ function parseSms(message) {
 
     // Extract phone: prioritize number following "من" / "from" / "بواسطة"
     let senderPhone = "";
-    const fromMatch = text.match(/(?:من|بواسطة|from)\s*(?:رقم\s*|حساب\s*|محفظة\s*)?[:\s]*([0-9+]{10,14})/i);
+    const receiverNum = normalizePhoneNumber(process.env.AUTO_TOPUP_WALLET_RECEIVER || "01104826670");
+
+    const fromMatch = text.match(/(?:من|بواسطة|from)\s*(?:رقم\s*|حساب\s*|محفظة\s*)?[:\s]*([0-9+]{10,16})/i);
     if (fromMatch) {
-      senderPhone = normalizePhoneNumber(fromMatch[1]);
+      const norm = normalizePhoneNumber(fromMatch[1]);
+      if (norm && norm !== receiverNum) {
+        senderPhone = norm;
+      }
+    }
+
+    // Phone in parentheses e.g. (00201012345678)
+    if (!senderPhone) {
+      const parenMatch = text.match(/\(([0-9+]{10,16})\)/);
+      if (parenMatch) {
+        const norm = normalizePhoneNumber(parenMatch[1]);
+        if (norm && norm !== receiverNum) {
+          senderPhone = norm;
+        }
+      }
     }
 
     // Fallback: any Egyptian mobile number in message that is NOT the store's receiver number
-    const receiverNum = normalizePhoneNumber(process.env.AUTO_TOPUP_WALLET_RECEIVER || "01104826670");
-    if (!senderPhone || senderPhone === receiverNum) {
-      const allPhones = Array.from(text.matchAll(/(01[0125]\d{8})/g)).map((m) => m[1]);
+    if (!senderPhone) {
+      const allPhones = Array.from(text.matchAll(/(?:(?:\+?20|0020|002)?(01[0125]\d{8}))/g)).map((m) => m[1]);
       const otherPhone = allPhones.find((p) => p !== receiverNum);
       if (otherPhone) {
         senderPhone = otherPhone;
@@ -146,14 +290,38 @@ function parseSms(message) {
       text.match(/\b([A-Z0-9]{8,14})\b/i)
     );
 
-    // If no phone number was found (or equals receiver), extract sender name for InstaPay/bank transfer to wallet
+    // Extract sender name: ALWAYS extract even if senderPhone is present!
     let senderName = "";
-    if (!senderPhone || senderPhone === receiverNum) {
-      const nameMatch = text.match(
+
+    // Pattern A: "من [NAME] ([PHONE])" or "من [NAME] [PHONE]"
+    const nameBeforePhone = text.match(/(?:من|بواسطة|from|by)\s+([\p{L}\s]{2,40}?)\s*(?:\([0-9+]+\)|[0-9+]{10,16})/iu);
+    if (nameBeforePhone && !/\d/.test(nameBeforePhone[1])) {
+      senderName = cleanExtractedName(nameBeforePhone[1]);
+    }
+
+    // Pattern B: "من [PHONE] بواسطة [NAME]" or "[PHONE] [NAME]"
+    if (!senderName) {
+      const nameAfterPhone = text.match(/[0-9+]{10,16}\s+(?:بواسطة|عبر|by)?\s*([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully|to|in|wallet|account|via|ref|trx)|\.|,|$)/iu);
+      if (nameAfterPhone && !/\d/.test(nameAfterPhone[1])) {
+        senderName = cleanExtractedName(nameAfterPhone[1]);
+      }
+    }
+
+    // Pattern C: General match after "من" / "بواسطة"
+    if (!senderName) {
+      const generalNameMatch = text.match(
         /(?:من|بواسطة|from|by)\s+(?:انستاباي\s*(?:بواسطة|\/)?\s*|ipn\s*(?:\/|-)?\s*|حساب\s+بنكي\s*(?:بواسطة|\/)?\s*)?([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully|to|in|wallet|account|via|ref|trx)|\.|,|$)/iu
       );
-      if (nameMatch && !/\d/.test(nameMatch[1])) {
-        senderName = nameMatch[1].trim();
+      if (generalNameMatch && !/\d/.test(generalNameMatch[1])) {
+        senderName = cleanExtractedName(generalNameMatch[1]);
+      }
+    }
+
+    // Pattern D: "بواسطة [NAME]"
+    if (!senderName) {
+      const byMatch = text.match(/(?:بواسطة|by)\s+([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully)|\.|,|$)/iu);
+      if (byMatch && !/\d/.test(byMatch[1])) {
+        senderName = cleanExtractedName(byMatch[1]);
       }
     }
 
@@ -172,7 +340,13 @@ function parseSms(message) {
       else if (text.includes("اتصالات") || text.includes("Etisalat") || text.includes("e&")) provider = "etisalat_cash";
       else if (text.includes("وي باي") || text.includes("WE Pay") || text.includes("WE pay")) provider = "we_pay";
 
-      const isInsta = !senderPhone || text.includes("إنستاباي") || text.includes("انستاباي") || text.includes("InstaPay") || text.includes("IPN");
+      const isInsta = (
+        text.includes("إنستاباي") ||
+        text.includes("انستاباي") ||
+        text.includes("InstaPay") ||
+        text.includes("IPN") ||
+        (!senderPhone && Boolean(senderName))
+      );
       const paymentMethod = isInsta ? "instapay" : "wallet";
       const prefix = isInsta ? "insta" : (provider === "vodafone_cash" ? "vf" : provider);
 
@@ -203,14 +377,12 @@ function parseSms(message) {
     text.includes("IPN") ||
     (text.includes("مرجع") && text.includes("مبلغ"))
   ) {
-    // Amount: match various patterns like "مبلغ 100.00 جنيه مصري" or "100 EGP"
     const instapayAmount = (
       text.match(/(?:مبلغ)\s*([\d,.]+)\s*(?:جنيه\s*مصري|جنيه|ج\.م|جم|EGP)/i) ||
       text.match(/([\d,.]+)\s*(?:جنيه\s*مصري|جنيه|ج\.م|جم|EGP)/i) ||
       text.match(/(?:EGP|جنيه|جم)\s*([\d,.]+)/i)
     );
 
-    // Reference: matches "مرجعي 123", "برقم مرجعي 123", "رقم المرجع: 123", "مرجع: 123", "Ref: 123"
     const instapayRef = (
       text.match(/(?:برقم\s+مرجعي|رقم\s+مرجعي|رقم\s+المرجع|مرجع\s+العملية|مرجع\s+الدفع|المرجع|مرجع|Ref(?:erence)?(?:\s+No\.?)?)[:\s#]*([A-Za-z0-9_-]{4,})/i) ||
       text.match(/(?:كود\s+العملية|Transaction\s*ID|رقم\s+العملية|رقم\s+التحويل)[:\s]*([A-Za-z0-9_-]{4,})/i)
@@ -221,23 +393,30 @@ function parseSms(message) {
       const amountPiasters = toPiasters(amtStr);
       const trxId = instapayRef[1].replace(/[^\w-]/g, "");
 
-      // Extract sender phone if present
-      const phoneMatch = text.match(/من\s*(?:رقم|حساب)?\s*([0-9+]{10,14})/i) || text.match(/(01[0125]\d{8})/);
+      // Extract sender phone if present (handles 002..., +20..., 01...)
+      const phoneMatch = text.match(/(?:من|رقم|حساب)?\s*(?:رقم\s*)?([0-9+]{10,16})/i) || text.match(/(01[0125]\d{8})/);
       const senderPhone = phoneMatch ? normalizePhoneNumber(phoneMatch[1]) : "";
 
-      // Extract sender name: "من محمد احمد" or "from John Doe"
+      // Extract sender name
       let senderName = "";
-      const nameMatchAr = text.match(
-        /(?:من|بواسطة|العميل)\s+(?:انستاباي\s*(?:بواسطة|\/)?\s*|ipn\s*(?:\/|-)?\s*|حساب\s+بنكي\s*(?:بواسطة|\/)?\s*)?([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|عبر|من\s+خلال|مرجع|كود|بمبلغ|لحسابك|بتاريخ|برقم|\.|,|$))/iu
-      );
-      if (nameMatchAr && !/\d/.test(nameMatchAr[1])) {
-        senderName = nameMatchAr[1].trim();
+      const nameBeforePhone = text.match(/(?:من|بواسطة|from|by)\s+([\p{L}\s]{2,40}?)\s*(?:\([0-9+]+\)|[0-9+]{10,16})/iu);
+      if (nameBeforePhone && !/\d/.test(nameBeforePhone[1])) {
+        senderName = cleanExtractedName(nameBeforePhone[1]);
+      }
+
+      if (!senderName) {
+        const nameMatchAr = text.match(
+          /(?:من|بواسطة|العميل)\s+(?:انستاباي\s*(?:بواسطة|\/)?\s*|ipn\s*(?:\/|-)?\s*|حساب\s+بنكي\s*(?:بواسطة|\/)?\s*)?([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|عبر|من\s+خلال|مرجع|كود|بمبلغ|لحسابك|بتاريخ|برقم|\.|,|$))/iu
+        );
+        if (nameMatchAr && !/\d/.test(nameMatchAr[1])) {
+          senderName = cleanExtractedName(nameMatchAr[1]);
+        }
       }
 
       if (!senderName) {
         const nameMatchEn = text.match(/(?:from|by)\s+([A-Za-z\s]{3,40}?)(?=\s+(?:via|ref|account|on|\.|$))/i);
         if (nameMatchEn && !/\d/.test(nameMatchEn[1])) {
-          senderName = nameMatchEn[1].trim();
+          senderName = cleanExtractedName(nameMatchEn[1]);
         }
       }
 

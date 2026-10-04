@@ -677,13 +677,13 @@ class StoreService {
       throw new Error("طلب الشحن هذا لم يعد معلقاً (تم إلغاؤه أو معالجته مسبقاً).");
     }
 
-    if (Number(topup.validate_attempts || 0) >= 5) {
-      throw new Error("تم تجاوز الحد الأقصى للمحاولات (5 محاولات). يرجى التواصل مع الدعم الفني.");
+    if (Number(topup.validate_attempts || 0) >= 20) {
+      throw new Error("تم تجاوز الحد الأقصى للمحاولات (20 محاولة). يرجى التواصل مع الدعم الفني.");
     }
 
     const cleanInput = cleanText(senderNameOrRef, 120);
     if (!cleanInput || cleanInput.length < 2) {
-      throw new Error("يرجى إدخال اسم الراسل في إنستاباي أو رقم المرجع بشكل صحيح.");
+      throw new Error("يرجى إدخال اسم الراسل في إنستاباي أو رقم الهاتف المحوّل منه أو رقم المرجع بشكل صحيح.");
     }
 
     // Save identifier and increment attempts
@@ -709,19 +709,33 @@ class StoreService {
     `).all(topup.amount_piasters, minReceivedAt, maxReceivedAt);
 
     let transfer = null;
+    const normInputPhone = normalizePhoneNumber(cleanInput);
+    const cleanRaw = cleanInput.replace(/[^\w-]/g, "");
+
     for (const cand of candidates) {
-      // 1. Check if name matches
+      // 1. Check if name matches (supports Arabic, English, transliteration)
       if (cand.sender_name && isNameMatch(cleanInput, cand.sender_name)) {
         transfer = cand;
         break;
       }
-      // 2. Check if ref / trxId matches
+      // 2. Check if phone matches (handles 002..., +20..., 01... normalized on both sides)
+      if (normInputPhone && normInputPhone.length >= 10) {
+        const candNormPhone = normalizePhoneNumber(cand.sender_phone);
+        if (candNormPhone && candNormPhone === normInputPhone) {
+          transfer = cand;
+          break;
+        }
+        if (cand.raw_message && normalizePhoneNumber(cand.raw_message).includes(normInputPhone)) {
+          transfer = cand;
+          break;
+        }
+      }
+      // 3. Check if ref / trxId matches
       if (cand.trx_id && (cand.trx_id === cleanInput || cand.trx_id.replace(/^[^_]+_/, "") === cleanInput)) {
         transfer = cand;
         break;
       }
-      // 3. Check if phone matches (if user entered phone)
-      if (cand.sender_phone && normalizePhoneNumber(cleanInput) === cand.sender_phone) {
+      if (cleanRaw.length >= 6 && cand.trx_id && cand.trx_id.includes(cleanRaw)) {
         transfer = cand;
         break;
       }
@@ -736,7 +750,7 @@ class StoreService {
       return {
         ok: false,
         topup: this.getTopup(topup.id),
-        error: "لم يتم العثور على تحويل إنستاباي مطابق بهذا الاسم والمبلغ حتى الآن. يرجى التأكد من إتمام التحويل والاسم الصحيح أو الانتظار ثوانٍ."
+        error: "لم يتم العثور على تحويل إنستاباي مطابق بهذا الاسم أو الرقم والمبلغ حتى الآن. يرجى التأكد من إتمام التحويل أو الانتظار ثوانٍ."
       };
     }
 
@@ -935,38 +949,26 @@ class StoreService {
     const minCreatedAt = new Date(new Date(receivedAt).getTime() - windowMinutes * 60 * 1000).toISOString();
     const maxCreatedAt = new Date(new Date(receivedAt).getTime() + windowMinutes * 60 * 1000).toISOString();
 
-    if (normPhone) {
-      // ONLY match if user has already entered their phone number AND it matches the SMS sender_phone
-      const byPhoneExact = this.db.prepare(`
-        SELECT * FROM topups
-        WHERE status = 'pending'
-          AND sender_identifier = ?
-          AND amount_piasters = ?
-          AND created_at >= ?
-          AND created_at <= ?
-        ORDER BY id DESC
-        LIMIT 1
-      `).get(normPhone, amount, minCreatedAt, maxCreatedAt);
-      if (byPhoneExact) return byPhoneExact;
-    }
+    const pendingTopups = this.db.prepare(`
+      SELECT * FROM topups
+      WHERE status = 'pending'
+        AND sender_identifier IS NOT NULL
+        AND sender_identifier != ''
+        AND amount_piasters = ?
+        AND created_at >= ?
+        AND created_at <= ?
+      ORDER BY id DESC
+    `).all(amount, minCreatedAt, maxCreatedAt);
 
-    if (senderName) {
-      // ONLY match if user has already entered their name/identifier AND it matches the SMS sender_name
-      const pendingTopups = this.db.prepare(`
-        SELECT * FROM topups
-        WHERE status = 'pending'
-          AND sender_identifier IS NOT NULL
-          AND sender_identifier != ''
-          AND amount_piasters = ?
-          AND created_at >= ?
-          AND created_at <= ?
-        ORDER BY id DESC
-      `).all(amount, minCreatedAt, maxCreatedAt);
-
-      for (const pt of pendingTopups) {
-        if (isNameMatch(pt.sender_identifier, senderName)) {
+    for (const pt of pendingTopups) {
+      if (normPhone) {
+        const ptNormPhone = normalizePhoneNumber(pt.sender_identifier);
+        if (ptNormPhone && ptNormPhone === normPhone) {
           return pt;
         }
+      }
+      if (senderName && isNameMatch(pt.sender_identifier, senderName)) {
+        return pt;
       }
     }
 

@@ -1280,16 +1280,17 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       `💵 المبلغ المطلوب تحويله بالضبط: **${formatMoney(topup.amount_piasters)}**`,
       `⚡ عنوان / رقم إنستاباي (InstaPay): \`${instapayReceiver}\``,
       "",
-      "📌 خطوات إتمام الشحن والتأكيد بالاسم:",
+      "📌 خطوات إتمام الشحن والتأكيد بالاسم أو الرقم:",
       "1. افتح تطبيق إنستاباي وحوّل المبلغ المحدد أعلاه للعنوان المذكور.",
-      "2. بعد إتمام التحويل، **أرسل اسمك المسجل في إنستاباي هنا في المحادثة مباشرة** (أو اضغط على الزر بالأسفل).",
-      "3. سيقوم البوت بمطابقة الإشعار وإضافة رصيدك فوراً.",
+      "2. بعد التحويل، **أرسل اسمك في إنستاباي أو رقم الهاتف المحول منه** هنا في المحادثة مباشرة.",
+      "3. سيقوم البوت بمطابقة الإشعار وإضافة رصيدك فوراً في ثوانٍ.",
     ];
     await api.sendMessage(chatId, panel("⚡ شحن رصيد فوري عبر إنستاباي", lines), {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
           [{ text: "✅ تم التحويل - تأكيد بالاسم", callback_data: `auto_topup_confirm_name:${topup.id}` }],
+          [{ text: "📱 التأكيد برقم إنستاباي المحوّل منه", callback_data: `auto_topup_confirm_instapay_phone:${topup.id}` }],
           [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
         ],
       },
@@ -1415,18 +1416,18 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
     }
   }
 
-  if (state.state === "auto_topup_sender_name") {
+  if (state.state === "auto_topup_sender_name" || state.state === "auto_topup_sender_instapay_phone") {
     const topupId = state.data.topupId;
     const cleanSender = text.trim();
     try {
       const result = store.verifyAndClaimInstaPayTopup(userId, topupId, cleanSender);
       if (result.ok) {
         store.clearState(userId);
-        const senderName = result.transfer?.sender_name || cleanSender;
+        const senderIdentifier = result.transfer?.sender_name || result.transfer?.sender_phone || cleanSender;
         const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
         const lines = [
           `💵 المبلغ المضاف: **${formatMoney(result.topup.amount_piasters)}**`,
-          `👤 اسم المحول: ${senderName}`,
+          `👤 المحوِّل: ${senderIdentifier}`,
           `🧾 كود العملية / المرجع: ${trxId}`,
           `💰 رصيدك الحالي: **${formatMoney(result.balance)}**`,
         ];
@@ -1439,17 +1440,17 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       // Not found yet
       const lines = [
         `المبلغ المطلوب: ${formatMoney(result.topup.amount_piasters)}`,
-        `الاسم المدخل: ${cleanSender}`,
+        `البيان المدخل: ${cleanSender}`,
         "",
         "⏳ لم يتم العثور على إشعار تحويل إنستاباي مطابق حتى الآن.",
-        "💡 يرجى التأكد من إتمام التحويل من تطبيق إنستاباي وأن الاسم يطابق اسم حسابك البنكي.",
-        "يمكنك الانتظار ثوانٍ ثم الضغط على [🔄 إعادة الفحص الآن] أو تعديل الاسم:",
+        "💡 في بعض البنوك والمحافظ لا يظهر الاسم في الرسالة أو يختلف الاسم المسجل، **يرجى إرسال رقم هاتف إنستاباي الذي حوّلت منه** (سواء كتبته برقم الموبايل 01xxxxxxxxx أو بكود مصر 00201xxxxxxxxx)، أو كود العملية من تطبيق إنستاباي للتأكيد الفوري:",
       ];
       await api.sendMessage(chatId, panel("⏳ في انتظار إشعار إنستاباي", lines), {
         reply_markup: {
           inline_keyboard: [
+            [{ text: "📱 التأكيد برقم إنستاباي المحوّل منه", callback_data: `auto_topup_confirm_instapay_phone:${topupId}` }],
             [{ text: "🔄 إعادة الفحص الآن", callback_data: `auto_topup_retry_name:${topupId}` }],
-            [{ text: "✏️ تعديل اسم المحول / المرجع", callback_data: `auto_topup_confirm_name:${topupId}` }],
+            [{ text: "✏️ تعديل الاسم أو الرقم", callback_data: `auto_topup_confirm_name:${topupId}` }],
             [{ text: "❌ إلغاء الطلب", callback_data: "flow:cancel" }],
           ],
         },
@@ -1459,6 +1460,7 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       await api.sendMessage(chatId, `⚠️ ${err.message}`, {
         reply_markup: {
           inline_keyboard: [
+            [{ text: "📱 التأكيد برقم إنستاباي المحوّل منه", callback_data: `auto_topup_confirm_instapay_phone:${topupId}` }],
             [{ text: "🔄 إعادة المحاولة", callback_data: `auto_topup_confirm_name:${topupId}` }],
             [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
           ],
@@ -2119,6 +2121,20 @@ async function handleCallback(api, store, superAdmins, query) {
     }
     store.setState(userId, "auto_topup_sender_name", { topupId });
     await safeEditOrSend(api, chatId, messageId, "👤 أرسل الآن اسم الراسل المسجل في إنستاباي أو رقم المرجع:", {
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
+    });
+    return;
+  }
+
+  if (data.startsWith("auto_topup_confirm_instapay_phone:")) {
+    const topupId = Number(data.split(":")[1]);
+    const topup = store.getTopup(topupId);
+    if (!topup || topup.user_id !== userId) {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ طلب الشحن غير موجود أو منتهي الصلاحية.", { reply_markup: homeKeyboard(false) });
+      return;
+    }
+    store.setState(userId, "auto_topup_sender_instapay_phone", { topupId });
+    await safeEditOrSend(api, chatId, messageId, "📱 أرسل الآن رقم هاتف إنستاباي الذي قمت بالتحويل منه (سواء كتبته 01xxxxxxxxx أو بكود مصر 00201xxxxxxxxx) أو كود العملية:", {
       reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] },
     });
     return;
