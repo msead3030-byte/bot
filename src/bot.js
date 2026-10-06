@@ -1249,17 +1249,39 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
     const amount = parseMoneyToPiasters(text);
     const receiver = autoTopupReceiver();
     const topup = store.createAutoTopup(userId, amount, "wallet", receiver);
+
+    // If pre-arrival SMS transfer was found (arrived up to 5 minutes before), credit immediately!
+    if (topup.autoClaimed) {
+      store.clearState(userId);
+      const senderPhone = topup.transfer?.sender_phone || topup.sender_identifier || "";
+      const trxId = topup.transfer?.trx_id ? topup.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
+      const lines = [
+        `💵 المبلغ المضاف: **${formatMoney(topup.amount_piasters)}**`,
+        `📱 وسيلة الدفع: e& money (اتصالات كاش)`,
+        senderPhone ? `📱 رقم المحول: ${senderPhone}` : "",
+        `🧾 كود العملية: ${trxId}`,
+        `💰 رصيدك الحالي: **${formatMoney(topup.balance)}**`,
+      ].filter(Boolean);
+      await api.sendMessage(chatId, panel("🎉 تم شحن رصيدك بنجاح!", lines), {
+        reply_markup: homeKeyboard(false),
+      });
+      return;
+    }
+
     store.setState(userId, "auto_topup_sender_phone", { topupId: topup.id });
+    const registeredPhoneLine = topup.sender_identifier
+      ? `\n📱 رقم هاتفك المسجل للتحويل: \`${topup.sender_identifier}\` (إذا كنت ستحوّل من رقم آخر، أرسله هنا)`
+      : "";
     const lines = [
       `💵 المبلغ المطلوب تحويله بالضبط: **${formatMoney(topup.amount_piasters)}**`,
-      `📱 رقم المحفظة / فودافون كاش: \`${receiver}\``,
+      `📱 رقم المحفظة / e& money: \`${receiver}\`${registeredPhoneLine}`,
       "",
       "📌 خطوات إتمام الشحن والتأكيد بالرقم:",
-      "1. قم بتحويل المبلغ المحدد أعلاه بالضبط إلى رقم المحفظة.",
+      "1. قم بتحويل المبلغ المحدد أعلاه بالضبط إلى رقم المحفظة عبر e& money.",
       "2. بعد إتمام التحويل، **أرسل رقم الهاتف الذي حوّلت منه أو كود العملية** هنا في المحادثة مباشرة (أو اضغط على الزر بالأسفل).",
-      "3. سيقوم البوت بمطابقة رسالة الـ SMS وإضافة رصيدك فوراً في ثوانٍ.",
+      "3. سيقوم البوت بمطابقة رسالة e& money وإضافة رصيدك فوراً في ثوانٍ (حتى لو تم التحويل قبل إنشاء الطلب بـ 5 دقائق).",
     ];
-    await api.sendMessage(chatId, panel("📱 شحن رصيد فوري عبر المحفظة", lines), {
+    await api.sendMessage(chatId, panel("📱 شحن رصيد فوري عبر e& money", lines), {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [

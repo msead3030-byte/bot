@@ -316,6 +316,36 @@ class SmsWebhookServer {
     sendJson(res, 404, { ok: false, error: "Not found." });
   }
 
+  // Helper to verify if an SMS is from official e& money
+  _isEAndMoney(senderInfo = "", rawText = "") {
+    const normSender = String(senderInfo || "").toLowerCase().replace(/[\s_-]+/g, "");
+    const normText = String(rawText || "").toLowerCase();
+
+    const eAndPatterns = [
+      "e&money",
+      "e&",
+      "etisalat",
+      "etisalatcash",
+      "eandmoney",
+      "اتصالات",
+      "اتصالاتكاش"
+    ];
+
+    const senderMatches = senderInfo && senderInfo !== "unknown" && eAndPatterns.some((p) => normSender.includes(p));
+    const textMatches = (
+      normText.includes("e& money") ||
+      normText.includes("e&money") ||
+      normText.includes("اتصالات كاش") ||
+      normText.includes("اتصالات") ||
+      normText.includes("e&")
+    );
+
+    if (senderInfo && senderInfo !== "unknown") {
+      return senderMatches;
+    }
+    return textMatches;
+  }
+
   // Shared SMS processing logic used by both GET and POST handlers
   async _processSmsText(rawText, res, senderPhone = "", senderInfo = "") {
     const sendOrReturn = (statusCode, data) => {
@@ -323,10 +353,10 @@ class SmsWebhookServer {
       return data;
     };
 
-    // Anti-Spoofing Protection:
+    // 1. Anti-Spoofing Protection:
     // If the forwarder app provided the SMS sender ID (the phone number/sender that transmitted the SMS to the phone),
     // check if it's a personal Egyptian mobile number.
-    // Official wallet/bank notifications ALWAYS come from alphanumeric IDs (e.g. VF-Cash, EtisalatCash, InstaPay, IPN),
+    // Official wallet notifications ALWAYS come from alphanumeric IDs (e.g. e& money, EtisalatCash),
     // NEVER from a random personal 11-digit mobile SIM card.
     if (senderInfo) {
       const normSenderInfo = normalizePhoneNumber(senderInfo);
@@ -339,8 +369,19 @@ class SmsWebhookServer {
       }
     }
 
-    // Parse SMS text
-    const parsed = parseSms(rawText);
+    // 2. Strict Filter: e& money only (to prevent fraud and confusion)
+    const onlyEAndMoney = process.env.AUTO_TOPUP_ONLY_EAND_MONEY !== "false";
+    if (onlyEAndMoney && !this._isEAndMoney(senderInfo, rawText)) {
+      console.warn(`[SMS Webhook] Ignored non-e& money message [Sender: ${senderInfo}]: "${String(rawText).slice(0, 80)}"`);
+      return sendOrReturn(200, {
+        ok: false,
+        status: "ignored_not_eand_money",
+        reason: "Message ignored: only official e& money notifications are processed to prevent fraud and confusion.",
+      });
+    }
+
+    // 3. Parse SMS text
+    const parsed = parseSms(rawText, { senderInfo, senderPhone });
     if (!parsed || !parsed.ok) {
       return sendOrReturn(200, {
         ok: false,
@@ -398,11 +439,13 @@ class SmsWebhookServer {
             const senderDetail = parsed.senderName
               ? `👤 اسم المحوِّل: ${parsed.rawSenderName || parsed.senderName}`
               : `📱 رقم المحول: ${parsed.senderPhone}`;
+            const providerName = parsed.provider === "etisalat_cash" ? "e& money (اتصالات كاش)" : "المحفظة الإلكترونية";
 
             const notification = [
               "🎉 تم تأكيد استلام تحويلك بنجاح!",
               "━━━━━━━━━━━━━━━━━━━━━━━━",
               `💵 المبلغ المضاف: ${amountEgp} جنيه`,
+              `📱 وسيلة الدفع: ${providerName}`,
               senderDetail,
               `🧾 كود العملية: ${parsed.trxId.replace(/^\w+_/, "")}`,
               `💰 رصيدك الحالي: ${balanceEgp} جنيه`,

@@ -524,7 +524,21 @@ class StoreService {
     return this.db.prepare("SELECT * FROM sms_transfers WHERE trx_id = ?").get(cleanText(trxId, 100)) || null;
   }
 
-  createAutoTopup(userId, amountPiasters, paymentMethod = "wallet", receiverNumber = "") {
+  getLastSenderPhone(userId) {
+    try {
+      const user = safeTelegramId(userId, "User ID");
+      const row = this.db.prepare(`
+        SELECT sender_identifier FROM topups
+        WHERE user_id = ? AND status = 'succeeded' AND sender_identifier != '' AND instructions = 'wallet'
+        ORDER BY id DESC LIMIT 1
+      `).get(user);
+      return row ? normalizePhoneNumber(row.sender_identifier) : "";
+    } catch {
+      return "";
+    }
+  }
+
+  createAutoTopup(userId, amountPiasters, paymentMethod = "wallet", receiverNumber = "", senderIdentifier = "") {
     const user = safeTelegramId(userId, "User ID");
     const amount = assertTopupAmount(amountPiasters);
     if (!this.getUser(user)) this.ensureUser({ id: user });
@@ -532,14 +546,57 @@ class StoreService {
     const orderId = orderRef("TOPUP");
     const paymentIntentId = `auto_${crypto.randomBytes(8).toString("hex")}`;
 
+    // Auto-populate sender_identifier from previous successful topup if not explicitly provided
+    let cleanSenderIdentifier = cleanText(senderIdentifier, 100);
+    if (!cleanSenderIdentifier && paymentMethod === "wallet") {
+      cleanSenderIdentifier = this.getLastSenderPhone(user);
+    }
+
     const result = this.db.prepare(`
       INSERT INTO topups (
         user_id, amount_piasters, provider_order_id, payment_intent_id,
-        status, receiver_number, instructions, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
-    `).run(user, amount, orderId, paymentIntentId, cleanText(receiverNumber, 50), cleanText(paymentMethod, 50), at, at);
+        status, receiver_number, instructions, sender_identifier, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+    `).run(user, amount, orderId, paymentIntentId, cleanText(receiverNumber, 50), cleanText(paymentMethod, 50), cleanSenderIdentifier, at, at);
 
-    return this.getTopup(result.lastInsertRowid);
+    let topup = this.getTopup(result.lastInsertRowid);
+
+    // Auto-Claim transfers that arrived up to 5 minutes BEFORE topup creation
+    if (cleanSenderIdentifier && paymentMethod === "wallet") {
+      const normPhone = normalizePhoneNumber(cleanSenderIdentifier);
+      const cleanRaw = cleanSenderIdentifier.replace(/[^\w-]/g, "");
+      const windowBeforeMinutes = Number(process.env.AUTO_TOPUP_WINDOW_BEFORE_MINUTES || 5);
+      const minReceivedAt = new Date(new Date(at).getTime() - windowBeforeMinutes * 60 * 1000).toISOString();
+      const maxReceivedAt = new Date(new Date(at).getTime() + 60 * 1000).toISOString();
+
+      const preTransfer = this.db.prepare(`
+        SELECT * FROM sms_transfers
+        WHERE status = 'unclaimed'
+          AND claimed_by_user_id IS NULL
+          AND (
+            (sender_phone != '' AND sender_phone = ?)
+            OR (LENGTH(?) >= 6 AND trx_id LIKE ?)
+          )
+          AND amount_piasters = ?
+          AND received_at >= ?
+          AND received_at <= ?
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(normPhone, cleanRaw, `%${cleanRaw}%`, amount, minReceivedAt, maxReceivedAt);
+
+      if (preTransfer) {
+        try {
+          const claimResult = this.autoClaimSmsTopup(topup, preTransfer);
+          if (claimResult.ok) {
+            topup = { ...claimResult.topup, autoClaimed: true, balance: claimResult.balance, transfer: claimResult.transfer };
+          }
+        } catch (err) {
+          console.warn("[StoreService] Pre-arrival auto-claim skipped:", err.message);
+        }
+      }
+    }
+
+    return topup;
   }
 
   verifyAndClaimSmsTopup(userId, topupId, senderPhone) {
@@ -573,9 +630,11 @@ class StoreService {
     `).run(normSender || cleanRaw, nowIso(), topup.id);
 
     // Look for matching unclaimed SMS transfer:
-    // Window: from (topup_created - windowMinutes) to (topup_created + windowMinutes)
+    // Window: from 5 minutes BEFORE topup creation (or AUTO_TOPUP_WINDOW_BEFORE_MINUTES)
+    // up to AUTO_TOPUP_EXPIRY_MINUTES after topup creation
+    const windowBeforeMinutes = Number(process.env.AUTO_TOPUP_WINDOW_BEFORE_MINUTES || 5);
     const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
-    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - windowMinutes * 60 * 1000).toISOString();
+    const minReceivedAt = new Date(new Date(topup.created_at).getTime() - windowBeforeMinutes * 60 * 1000).toISOString();
     const maxReceivedAt = new Date(new Date(topup.created_at).getTime() + windowMinutes * 60 * 1000).toISOString();
 
     const transfer = this.db.prepare(`
@@ -583,7 +642,7 @@ class StoreService {
       WHERE status = 'unclaimed'
         AND claimed_by_user_id IS NULL
         AND (
-          (sender_phone != '' AND sender_phone = ?)
+          (sender_phone != '' AND (sender_phone = ? OR sender_phone = ? OR sender_phone LIKE ?))
           OR (LENGTH(?) >= 6 AND trx_id LIKE ?)
         )
         AND amount_piasters = ?
@@ -591,7 +650,7 @@ class StoreService {
         AND received_at <= ?
       ORDER BY id DESC
       LIMIT 1
-    `).get(normSender, cleanRaw, `%${cleanRaw}%`, topup.amount_piasters, minReceivedAt, maxReceivedAt);
+    `).get(normSender, `002${normSender}`, `%${normSender}%`, cleanRaw, `%${cleanRaw}%`, topup.amount_piasters, minReceivedAt, maxReceivedAt);
 
     if (!transfer) {
       this.db.prepare(`
@@ -652,7 +711,7 @@ class StoreService {
         at
       );
 
-      claimedTransfer = freshTransfer;
+      claimedTransfer = this.db.prepare("SELECT * FROM sms_transfers WHERE id = ?").get(transfer.id);
     })();
 
     return {
@@ -799,7 +858,7 @@ class StoreService {
         at
       );
 
-      claimedTransfer = freshTransfer;
+      claimedTransfer = this.db.prepare("SELECT * FROM sms_transfers WHERE id = ?").get(transfer.id);
     })();
 
     return {
@@ -945,15 +1004,16 @@ class StoreService {
     const normPhone = normalizePhoneNumber(senderPhone);
     const amount = Number(amountPiasters);
     const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
-    // Look for topups created within windowMinutes before or after SMS arrival
+    const windowBeforeMinutes = Number(process.env.AUTO_TOPUP_WINDOW_BEFORE_MINUTES || 5);
+
+    // Look for topups created within [receivedAt - windowMinutes, receivedAt + windowBeforeMinutes]
+    // i.e. SMS arrived up to 5 minutes BEFORE the topup was created, or up to 30 minutes AFTER
     const minCreatedAt = new Date(new Date(receivedAt).getTime() - windowMinutes * 60 * 1000).toISOString();
-    const maxCreatedAt = new Date(new Date(receivedAt).getTime() + windowMinutes * 60 * 1000).toISOString();
+    const maxCreatedAt = new Date(new Date(receivedAt).getTime() + windowBeforeMinutes * 60 * 1000).toISOString();
 
     const pendingTopups = this.db.prepare(`
       SELECT * FROM topups
       WHERE status = 'pending'
-        AND sender_identifier IS NOT NULL
-        AND sender_identifier != ''
         AND amount_piasters = ?
         AND created_at >= ?
         AND created_at <= ?
@@ -961,13 +1021,16 @@ class StoreService {
     `).all(amount, minCreatedAt, maxCreatedAt);
 
     for (const pt of pendingTopups) {
-      if (normPhone) {
-        const ptNormPhone = normalizePhoneNumber(pt.sender_identifier);
-        if (ptNormPhone && ptNormPhone === normPhone) {
+      const candidatePhone = pt.sender_identifier
+        ? normalizePhoneNumber(pt.sender_identifier)
+        : this.getLastSenderPhone(pt.user_id);
+
+      if (normPhone && candidatePhone) {
+        if (candidatePhone === normPhone) {
           return pt;
         }
       }
-      if (senderName && isNameMatch(pt.sender_identifier, senderName)) {
+      if (senderName && pt.sender_identifier && isNameMatch(pt.sender_identifier, senderName)) {
         return pt;
       }
     }

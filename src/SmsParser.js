@@ -154,7 +154,11 @@ function cleanExtractedName(raw) {
   const stopWords = [
     "انستاباي", "إنستاباي", "انستا باي", "إنستا باي", "انستا", "إنستا", "ipn", "instapay",
     "محفظة", "محفظتك", "حساب", "حسابك", "بنك", "كاش", "فودافون", "اتصالات", "اورانج", "أورانج", "وي",
-    "عميل", "العميل", "بواسطة", "عبر", "من خلال", "من"
+    "عميل", "العميل", "بواسطة", "عبر", "من خلال", "من",
+    "المسجل باسم", "المسجل", "باسم",
+    "رقم", "رقم الهاتف", "هاتف", "موبايل", "mobile", "phone",
+    "بنجاح", "نجاح", "successfully", "success",
+    "e& money", "e&money", "e&", "جنيه", "جنية", "ج.م", "جم", "EGP", "LE"
   ];
   for (const sw of stopWords) {
     const reg = new RegExp(`(^|\\s)${sw}(\\s|$)`, "giu");
@@ -162,6 +166,10 @@ function cleanExtractedName(raw) {
   }
   name = name.replace(/\s+/g, " ").trim();
   if (name.length >= 2 && /[\p{L}]/u.test(name)) {
+    // Extra guard: do not return names that are common single words like رقم or بنجاح
+    if (/^(رقم|بنجاح|نجاح|هاتف|موبايل|كاش|محفظة|جنيه|جنية)$/i.test(name)) {
+      return "";
+    }
     return name;
   }
   return "";
@@ -231,12 +239,15 @@ function toPiasters(amountStr) {
  * - Etisalat Cash (اتصالات كاش)
  * - WE Pay (وي باي)
  */
-function parseSms(message) {
+function parseSms(message, options = {}) {
   const text = String(message || "").trim();
   if (!text) return null;
 
+  const optSenderInfo = String(options.senderInfo || "").trim();
+  const optSenderPhone = String(options.senderPhone || "").trim();
+
   // ----------------------------------------------------
-  // 1. Vodafone Cash & Egyptian Mobile Wallets (المحافظ الإلكترونية)
+  // 1. Vodafone Cash, e& money / Etisalat Cash & Egyptian Mobile Wallets
   // ----------------------------------------------------
   if (
     text.includes("استلام") ||
@@ -245,12 +256,15 @@ function parseSms(message) {
     text.includes("received") ||
     text.includes("كاش") ||
     text.includes("Cash") ||
-    text.includes("محفظ")
+    text.includes("محفظ") ||
+    text.includes("e&") ||
+    /e&|etisalat|اتصالات/i.test(optSenderInfo)
   ) {
+    // Avoid matching balance numbers (e.g. "رصيد محفظتك الحالي 150") by prioritizing transaction amount
     const amountMatch = (
-      text.match(/(?:تم\s+(?:استلام|تحويل|إيداع)|مبلغ|استلام|تحويل|إيداع)\s*(?:مبلغ\s*)?([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم|ج|EGP|LE)?/i) ||
-      text.match(/([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم|EGP|LE)/i) ||
-      text.match(/(?:EGP|LE|جنيه|ج\.م|جم)\s*([\d,.]+)/i)
+      text.match(/(?:تم\s+(?:استلام|تحويل|إيداع)|استلام|تحويل|إيداع|مبلغ)\s*(?:مبلغ\s*)?([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم|ج|EGP|LE)?/i) ||
+      text.match(/([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم|EGP|LE)(?!\s*(?:رصيد|balance))/i) ||
+      text.match(/(?:EGP|LE|جنيه|ج\.م|جم)\s*([\d,.]+)(?!\s*(?:رصيد|balance))/i)
     );
 
     // Extract phone: prioritize number following "من" / "from" / "بواسطة"
@@ -285,16 +299,24 @@ function parseSms(message) {
       }
     }
 
+    // Fallback to externally provided senderPhone (from gateway) if not found in text
+    if (!senderPhone && optSenderPhone) {
+      const normOpt = normalizePhoneNumber(optSenderPhone);
+      if (normOpt && normOpt !== receiverNum) {
+        senderPhone = normOpt;
+      }
+    }
+
     const trxMatch = (
       text.match(/(?:رقم\s+العملية|كود\s+العملية|رقم\s+المعاملة|كود\s+المعاملة|رقم\s+التحويل|كود\s+التحويل|عملية\s+رقم|معاملة\s+رقم|العملية|مرجع(?:\s+العملية)?|المرجع|برقم\s+مرجعي|Transaction\s*ID|Trx\s*ID|Ref(?:erence)?(?:\s+No\.?)?)[:\s#]*([A-Za-z0-9_-]{4,})/i) ||
       text.match(/\b([A-Z0-9]{8,14})\b/i)
     );
 
-    // Extract sender name: ALWAYS extract even if senderPhone is present!
+    // Extract sender name
     let senderName = "";
 
     // Pattern A: "من [NAME] ([PHONE])" or "من [NAME] [PHONE]"
-    const nameBeforePhone = text.match(/(?:من|بواسطة|from|by)\s+([\p{L}\s]{2,40}?)\s*(?:\([0-9+]+\)|[0-9+]{10,16})/iu);
+    const nameBeforePhone = text.match(/(?:من|بواسطة|from|by)\s+(?:رقم\s+|محفظة\s+|حساب\s+)?([\p{L}\s]{2,40}?)\s*(?:\([0-9+]+\)|[0-9+]{10,16})/iu);
     if (nameBeforePhone && !/\d/.test(nameBeforePhone[1])) {
       senderName = cleanExtractedName(nameBeforePhone[1]);
     }
@@ -307,7 +329,15 @@ function parseSms(message) {
       }
     }
 
-    // Pattern C: General match after "من" / "بواسطة"
+    // Pattern C: "المسجل باسم [NAME]" (used by e& money and Vodafone Cash)
+    if (!senderName) {
+      const registeredName = text.match(/(?:المسجل\s+باسم|باسم)\s+([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully)|\.|,|$)/iu);
+      if (registeredName && !/\d/.test(registeredName[1])) {
+        senderName = cleanExtractedName(registeredName[1]);
+      }
+    }
+
+    // Pattern D: General match after "من" / "بواسطة"
     if (!senderName) {
       const generalNameMatch = text.match(
         /(?:من|بواسطة|from|by)\s+(?:انستاباي\s*(?:بواسطة|\/)?\s*|ipn\s*(?:\/|-)?\s*|حساب\s+بنكي\s*(?:بواسطة|\/)?\s*)?([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully|to|in|wallet|account|via|ref|trx)|\.|,|$)/iu
@@ -317,7 +347,7 @@ function parseSms(message) {
       }
     }
 
-    // Pattern D: "بواسطة [NAME]"
+    // Pattern E: "بواسطة [NAME]"
     if (!senderName) {
       const byMatch = text.match(/(?:بواسطة|by)\s+([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully)|\.|,|$)/iu);
       if (byMatch && !/\d/.test(byMatch[1])) {
@@ -329,26 +359,40 @@ function parseSms(message) {
       const amountPiasters = toPiasters(amountMatch[1]);
       let trxId = trxMatch ? trxMatch[1].replace(/[^\w-]/g, "") : "";
 
-      if (!trxId) {
-        const numMatch = text.match(/\b(\d{6,12})\b/);
-        trxId = numMatch ? numMatch[1] : `${Date.now()}`;
+      // Safety: NEVER use sender phone or receiver phone as fallback trxId
+      if (!trxId || trxId === senderPhone || trxId === receiverNum) {
+        const numMatches = Array.from(text.matchAll(/\b(\d{5,14})\b/g)).map((m) => m[1]);
+        const validNum = numMatches.find((n) => {
+          const normN = normalizePhoneNumber(n);
+          return normN !== senderPhone && normN !== receiverNum && !n.startsWith("2025") && !n.startsWith("2026");
+        });
+        trxId = validNum || `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       }
 
       let provider = "wallet";
-      if (text.includes("فودافون") || text.includes("Vodafone")) provider = "vodafone_cash";
-      else if (text.includes("اورانج") || text.includes("أورانج") || text.includes("Orange")) provider = "orange_cash";
-      else if (text.includes("اتصالات") || text.includes("Etisalat") || text.includes("e&")) provider = "etisalat_cash";
-      else if (text.includes("وي باي") || text.includes("WE Pay") || text.includes("WE pay")) provider = "we_pay";
+      const isEAnd = (
+        text.includes("اتصالات") ||
+        text.includes("Etisalat") ||
+        text.includes("e&") ||
+        /e&|etisalat|اتصالات/i.test(optSenderInfo)
+      );
+
+      if (isEAnd) provider = "etisalat_cash";
+      else if (text.includes("فودافون") || text.includes("Vodafone") || /vodafone|vf/i.test(optSenderInfo)) provider = "vodafone_cash";
+      else if (text.includes("اورانج") || text.includes("أورانج") || text.includes("Orange") || /orange/i.test(optSenderInfo)) provider = "orange_cash";
+      else if (text.includes("وي باي") || text.includes("WE Pay") || text.includes("WE pay") || /we\s*pay/i.test(optSenderInfo)) provider = "we_pay";
 
       const isInsta = (
-        text.includes("إنستاباي") ||
-        text.includes("انستاباي") ||
-        text.includes("InstaPay") ||
-        text.includes("IPN") ||
-        (!senderPhone && Boolean(senderName))
+        !isEAnd && (
+          text.includes("إنستاباي") ||
+          text.includes("انستاباي") ||
+          text.includes("InstaPay") ||
+          text.includes("IPN") ||
+          (!senderPhone && Boolean(senderName))
+        )
       );
       const paymentMethod = isInsta ? "instapay" : "wallet";
-      const prefix = isInsta ? "insta" : (provider === "vodafone_cash" ? "vf" : provider);
+      const prefix = isInsta ? "insta" : (provider === "etisalat_cash" ? "eand" : (provider === "vodafone_cash" ? "vf" : provider));
 
       if (amountPiasters > 0 && trxId) {
         return {
