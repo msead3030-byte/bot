@@ -13,7 +13,9 @@
     "test": "node --test",
     "seed:sample": "node bin/seed-sample.js",
     "sms:status": "node bin/sms-gateway.js status",
-    "sms:register": "node bin/sms-gateway.js register"
+    "sms:register": "node bin/sms-gateway.js register",
+    "sms:list": "node bin/sms-gateway.js list",
+    "sms:delete": "node bin/sms-gateway.js delete"
   },
   "dependencies": {
     "better-sqlite3": "^12.10.0",

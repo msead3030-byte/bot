@@ -1070,7 +1070,30 @@ class StoreService {
     return null;
   }
 
-  userDepositLedger(userId, limit = 20) {
+  /**
+   * Finds an existing pending topup for a user with the same amount and payment method.
+   * Used to avoid creating duplicate topup requests and redirect user to the existing one.
+   */
+  findExistingPendingTopup(userId, amountPiasters, paymentMethod) {
+    const user = safeTelegramId(userId, "User ID");
+    const amount = Number(amountPiasters);
+    const method = cleanText(paymentMethod, 50).toLowerCase();
+    // Only look at topups created within the last expiry window (default 30 minutes)
+    const windowMinutes = Number(process.env.AUTO_TOPUP_EXPIRY_MINUTES || 30);
+    const minCreatedAt = new Date(Date.now() - windowMinutes * 60 * 1000).toISOString();
+    return this.db.prepare(`
+      SELECT * FROM topups
+      WHERE user_id = ?
+        AND amount_piasters = ?
+        AND instructions = ?
+        AND status = 'pending'
+        AND created_at >= ?
+      ORDER BY id DESC
+      LIMIT 1
+    `).get(user, amount, method, minCreatedAt) || null;
+  }
+
+
     return this.db.prepare(`
       SELECT * FROM ledger
       WHERE user_id = ? AND amount_piasters > 0
