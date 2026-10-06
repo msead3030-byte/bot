@@ -164,6 +164,8 @@ function cleanExtractedName(raw) {
     const reg = new RegExp(`(^|\\s)${sw}(\\s|$)`, "giu");
     name = name.replace(reg, " ");
   }
+  // Special case: e& money joins "باسم" directly to the name (e.g. "باسممحمد") - strip prefix
+  name = name.replace(/^باسم/u, "").trim();
   name = name.replace(/\s+/g, " ").trim();
   if (name.length >= 2 && /[\p{L}]/u.test(name)) {
     // Extra guard: do not return names that are common single words like رقم or بنجاح
@@ -330,8 +332,9 @@ function parseSms(message, options = {}) {
     }
 
     // Pattern C: "المسجل باسم [NAME]" (used by e& money and Vodafone Cash)
+    // Note: e& money sometimes joins "باسم" directly to the name without a space (e.g. "المسجل باسممحمد")
     if (!senderName) {
-      const registeredName = text.match(/(?:المسجل\s+باسم|باسم)\s+([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully)|\.|,|$)/iu);
+      const registeredName = text.match(/(?:المسجل\s+باسم|(?:المسجل|باسم))\s*([\p{L}\s]{2,50}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully)|\.|,|$)/iu);
       if (registeredName && !/\d/.test(registeredName[1])) {
         senderName = cleanExtractedName(registeredName[1]);
       }
