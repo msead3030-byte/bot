@@ -165,7 +165,7 @@ function cleanExtractedName(raw) {
     name = name.replace(reg, " ");
   }
   // Special case: e& money joins "باسم" directly to the name (e.g. "باسممحمد") - strip prefix
-  name = name.replace(/^باسم/u, "").trim();
+  name = name.trim().replace(/^باسم/u, "").trim();
   name = name.replace(/\s+/g, " ").trim();
   if (name.length >= 2 && /[\p{L}]/u.test(name)) {
     // Extra guard: do not return names that are common single words like رقم or بنجاح
@@ -252,19 +252,12 @@ function parseSms(message, options = {}) {
   // 1. Vodafone Cash, e& money / Etisalat Cash & Egyptian Mobile Wallets
   // ----------------------------------------------------
   if (
-    text.includes("استلام") ||
-    text.includes("تحويل") ||
-    text.includes("إيداع") ||
-    text.includes("received") ||
-    text.includes("كاش") ||
-    text.includes("Cash") ||
-    text.includes("محفظ") ||
-    text.includes("e&") ||
+    /[إا]ستلام|[إا]يداع|تحويل|received|كاش|cash|محفظ|e&/i.test(text) ||
     /e&|etisalat|اتصالات/i.test(optSenderInfo)
   ) {
     // Avoid matching balance numbers (e.g. "رصيد محفظتك الحالي 150") by prioritizing transaction amount
     const amountMatch = (
-      text.match(/(?:تم\s+(?:استلام|تحويل|إيداع)|استلام|تحويل|إيداع|مبلغ)\s*(?:مبلغ\s*)?([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم|ج|EGP|LE)?/i) ||
+      text.match(/(?:تم\s+(?:[إا]ستلام|تحويل|[إا]يداع)|[إا]ستلام|تحويل|[إا]يداع|مبلغ)\s*(?:مبلغ\s*)?([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم|ج|EGP|LE)?/i) ||
       text.match(/([\d,.]+)\s*(?:جنيه|جنية|ج\.م|جم|EGP|LE)(?!\s*(?:رصيد|balance))/i) ||
       text.match(/(?:EGP|LE|جنيه|ج\.م|جم)\s*([\d,.]+)(?!\s*(?:رصيد|balance))/i)
     );
@@ -323,20 +316,20 @@ function parseSms(message, options = {}) {
       senderName = cleanExtractedName(nameBeforePhone[1]);
     }
 
-    // Pattern B: "من [PHONE] بواسطة [NAME]" or "[PHONE] [NAME]"
+    // Pattern B (e& money / Vodafone Cash): "المسجل باسم [NAME]"
+    // Note: e& money sometimes joins "باسم" directly to the name without a space (e.g. "المسجل باسممحمد")
+    if (!senderName) {
+      const registeredName = text.match(/(?:المسجل\s*باسم|(?:المسجل|باسم))\s*([\p{L}\s]{2,50}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully)|\.|,|$)/iu);
+      if (registeredName && !/\d/.test(registeredName[1])) {
+        senderName = cleanExtractedName(registeredName[1]);
+      }
+    }
+
+    // Pattern C: "من [PHONE] بواسطة [NAME]" or "[PHONE] [NAME]"
     if (!senderName) {
       const nameAfterPhone = text.match(/[0-9+]{10,16}\s+(?:بواسطة|عبر|by)?\s*([\p{L}\s]{2,40}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully|to|in|wallet|account|via|ref|trx)|\.|,|$)/iu);
       if (nameAfterPhone && !/\d/.test(nameAfterPhone[1])) {
         senderName = cleanExtractedName(nameAfterPhone[1]);
-      }
-    }
-
-    // Pattern C: "المسجل باسم [NAME]" (used by e& money and Vodafone Cash)
-    // Note: e& money sometimes joins "باسم" directly to the name without a space (e.g. "المسجل باسممحمد")
-    if (!senderName) {
-      const registeredName = text.match(/(?:المسجل\s+باسم|(?:المسجل|باسم))\s*([\p{L}\s]{2,50}?)(?=\s+(?:بنجاح|في|محفظ|إلى|الى|لحسابك|عبر|رقم|كود|مرجع|عملية|معاملة|بتاريخ|برقم|successfully)|\.|,|$)/iu);
-      if (registeredName && !/\d/.test(registeredName[1])) {
-        senderName = cleanExtractedName(registeredName[1]);
       }
     }
 
@@ -377,6 +370,7 @@ function parseSms(message, options = {}) {
         text.includes("اتصالات") ||
         text.includes("Etisalat") ||
         text.includes("e&") ||
+        /المسجل\s*باسم/i.test(text) ||
         /e&|etisalat|اتصالات/i.test(optSenderInfo)
       );
 
@@ -487,7 +481,7 @@ function parseSms(message, options = {}) {
   // ----------------------------------------------------
   // 3. Orange Cash, Etisalat Cash, WE Pay (عام لكافة المحافظ)
   // ----------------------------------------------------
-  const genericAmountMatch = text.match(/(?:استلام|تحويل|إيداع|مبلغ)\s+([\d,.]+)\s*(?:جنيه|ج\.م|جم|EGP)?/i)
+  const genericAmountMatch = text.match(/(?:[إا]ستلام|تحويل|[إا]يداع|مبلغ)\s+([\d,.]+)\s*(?:جنيه|ج\.م|جم|EGP)?/i)
     || text.match(/([\d,.]+)\s*(?:جنيه|ج\.م|جم|EGP)/i);
   const genericPhoneMatch = text.match(/(?:من|رقم)?\s*(01[0125]\d{8})/);
   const genericTrxMatch = text.match(/(?:رقم\s+العملية|رقم\s+المعاملة|المرجع|كود\s+العملية|Transaction\s*ID|Ref)[:\s]*([A-Za-z0-9_-]{4,})/i);

@@ -337,13 +337,14 @@ class SmsWebhookServer {
       normText.includes("e&money") ||
       normText.includes("اتصالات كاش") ||
       normText.includes("اتصالات") ||
-      normText.includes("e&")
+      normText.includes("e&") ||
+      normText.includes("المسجل باسم") ||
+      /المسجل\s*باسم/i.test(rawText)
     );
 
-    if (senderInfo && senderInfo !== "unknown") {
-      return senderMatches;
-    }
-    return textMatches;
+    if (senderMatches) return true;
+    if (textMatches) return true;
+    return false;
   }
 
   // Shared SMS processing logic used by both GET and POST handlers

@@ -505,6 +505,13 @@ class StoreService {
       return { duplicate: true, transfer: existing };
     }
 
+    if (rawMessage) {
+      const existingMsg = this.db.prepare("SELECT * FROM sms_transfers WHERE raw_message = ?").get(cleanText(rawMessage, 2000));
+      if (existingMsg) {
+        return { duplicate: true, transfer: existingMsg };
+      }
+    }
+
     const normPhone = normalizePhoneNumber(senderPhone);
     const normName = normalizeSenderName(senderName);
     const amount = Number(amountPiasters);
@@ -616,10 +623,12 @@ class StoreService {
       throw new Error("تم تجاوز الحد الأقصى للمحاولات. يرجى التواصل مع الدعم الفني.");
     }
 
-    const normSender = normalizePhoneNumber(senderPhone);
-    const cleanRaw = cleanText(senderPhone, 100).replace(/[^\w-]/g, "");
-    if ((!normSender || normSender.length < 10) && (!cleanRaw || cleanRaw.length < 6)) {
-      throw new Error("يرجى إدخال رقم هاتف محفظة صحيح (مثال: 01012345678) أو كود العملية من رسالة التحويل.");
+    const cleanInput = cleanText(senderPhone, 100);
+    const normSender = normalizePhoneNumber(cleanInput);
+    const cleanRaw = cleanInput.replace(/[^\w-]/g, "");
+    const hasValidName = cleanInput.length >= 2 && /[\p{L}]/u.test(cleanInput);
+    if ((!normSender || normSender.length < 10) && (!cleanRaw || cleanRaw.length < 6) && !hasValidName) {
+      throw new Error("يرجى إدخال رقم هاتف محفظة صحيح (مثال: 01012345678) أو اسم المحول أو كود العملية من رسالة التحويل.");
     }
 
     // Save sender identifier and increment attempts
@@ -627,7 +636,7 @@ class StoreService {
       UPDATE topups
       SET sender_identifier = ?, validate_attempts = validate_attempts + 1, updated_at = ?
       WHERE id = ?
-    `).run(normSender || cleanRaw, nowIso(), topup.id);
+    `).run(normSender || cleanInput, nowIso(), topup.id);
 
     // Look for matching unclaimed SMS transfer:
     // Window: from 5 minutes BEFORE topup creation (or AUTO_TOPUP_WINDOW_BEFORE_MINUTES)
@@ -637,20 +646,43 @@ class StoreService {
     const minReceivedAt = new Date(new Date(topup.created_at).getTime() - windowBeforeMinutes * 60 * 1000).toISOString();
     const maxReceivedAt = new Date(new Date(topup.created_at).getTime() + windowMinutes * 60 * 1000).toISOString();
 
-    const transfer = this.db.prepare(`
-      SELECT * FROM sms_transfers
-      WHERE status = 'unclaimed'
-        AND claimed_by_user_id IS NULL
-        AND (
-          (sender_phone != '' AND (sender_phone = ? OR sender_phone = ? OR sender_phone LIKE ?))
-          OR (LENGTH(?) >= 6 AND trx_id LIKE ?)
-        )
-        AND amount_piasters = ?
-        AND received_at >= ?
-        AND received_at <= ?
-      ORDER BY id DESC
-      LIMIT 1
-    `).get(normSender, `002${normSender}`, `%${normSender}%`, cleanRaw, `%${cleanRaw}%`, topup.amount_piasters, minReceivedAt, maxReceivedAt);
+    let transfer = null;
+    if (normSender || cleanRaw.length >= 6) {
+      transfer = this.db.prepare(`
+        SELECT * FROM sms_transfers
+        WHERE status = 'unclaimed'
+          AND claimed_by_user_id IS NULL
+          AND (
+            (sender_phone != '' AND (sender_phone = ? OR sender_phone = ? OR sender_phone LIKE ?))
+            OR (LENGTH(?) >= 6 AND trx_id LIKE ?)
+          )
+          AND amount_piasters = ?
+          AND received_at >= ?
+          AND received_at <= ?
+        ORDER BY id DESC
+        LIMIT 1
+      `).get(normSender, `002${normSender}`, `%${normSender}%`, cleanRaw, `%${cleanRaw}%`, topup.amount_piasters, minReceivedAt, maxReceivedAt);
+    }
+
+    // Fallback: check by sender name if not found by phone/code
+    if (!transfer && hasValidName) {
+      const candidates = this.db.prepare(`
+        SELECT * FROM sms_transfers
+        WHERE status = 'unclaimed'
+          AND claimed_by_user_id IS NULL
+          AND amount_piasters = ?
+          AND received_at >= ?
+          AND received_at <= ?
+        ORDER BY id DESC
+      `).all(topup.amount_piasters, minReceivedAt, maxReceivedAt);
+
+      for (const cand of candidates) {
+        if (cand.sender_name && isNameMatch(cleanInput, cand.sender_name)) {
+          transfer = cand;
+          break;
+        }
+      }
+    }
 
     if (!transfer) {
       this.db.prepare(`

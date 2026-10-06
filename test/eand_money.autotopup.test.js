@@ -185,3 +185,47 @@ test("e& money: Anti-fraud ensures transfer cannot be claimed by another user or
     cleanup();
   }
 });
+
+test("e& money: Real-world SMS with 'إستلام' and attached 'باسممحمد' correctly parses and verifies by phone OR name", async () => {
+  const { store, cleanup } = fixture();
+  try {
+    const server = new SmsWebhookServer({ store, api: null });
+    store.ensureUser({ id: "5001", first_name: "Mohamed" });
+
+    // Real SMS string exactly as sent by Egyptian e& money network:
+    const realSms = "تم إستلام مبلغ 80.00 ج.م من رقم 01021510826 المسجل باسممحمد السيد مصطفى على   بنجاح.";
+
+    // 1. Verify parser extracts clean sender name and provider
+    const parsed = parseSms(realSms);
+    assert.ok(parsed, "Parser must handle SMS with إستلام and no senderInfo");
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.provider, "etisalat_cash");
+    assert.equal(parsed.amountPiasters, 8000);
+    assert.equal(parsed.senderPhone, "01021510826");
+    assert.equal(parsed.rawSenderName, "محمد السيد مصطفى على");
+    assert.equal(parsed.senderName, "محمد السيد مصطفي علي");
+
+    // 2. Webhook processing (even without senderInfo header) accepts it as e& money
+    const res = await server._processSmsText(realSms, null);
+    assert.equal(res.ok, true);
+    assert.equal(res.status, "recorded");
+
+    // 3. Duplicate check: sending the exact same SMS again should be recognized as duplicate
+    const resDup = await server._processSmsText(realSms, null);
+    assert.equal(resDup.ok, true);
+    assert.equal(resDup.status, "duplicate_ignored");
+
+    // 4. User Mohamed creates topup for 80 EGP
+    const topup = store.createAutoTopup("5001", 8000, "wallet", "01104826670");
+    assert.equal(topup.status, "pending");
+
+    // 5. Verification by sender name (instead of phone) should succeed
+    const claimByName = store.verifyAndClaimSmsTopup("5001", topup.id, "محمد السيد مصطفى");
+    assert.equal(claimByName.ok, true);
+    assert.equal(claimByName.topup.status, "succeeded");
+    assert.equal(store.balance("5001"), 8000);
+  } finally {
+    cleanup();
+  }
+});
+
