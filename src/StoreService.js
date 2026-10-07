@@ -1093,7 +1093,7 @@ class StoreService {
     `).get(user, amount, method, minCreatedAt) || null;
   }
 
-
+  userDepositLedger(userId, limit = 20) {
     return this.db.prepare(`
       SELECT * FROM ledger
       WHERE user_id = ? AND amount_piasters > 0
