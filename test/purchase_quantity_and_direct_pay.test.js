@@ -138,7 +138,8 @@ test("Bot: interactive quantity selection and wallet checkout flow", async () =>
     const lastCall1 = api.calls[api.calls.length - 1];
     assert.equal(lastCall1.method, "editMessageText");
     assert.match(lastCall1.args[2], /تحديد الكمية وطريقة الدفع/);
-    assert.match(lastCall1.args[2], /الكمية المحددة:\s*\*\*1\*\*/);
+    assert.match(lastCall1.args[2], /الكمية المحددة/);
+    assert.match(lastCall1.args[2], /1\*\* قطعة/);
 
     // 2. User increases quantity to 2
     await handleCallback(api, store, [adminId], {
@@ -150,8 +151,9 @@ test("Bot: interactive quantity selection and wallet checkout flow", async () =>
 
     const lastCall2 = api.calls[api.calls.length - 1];
     assert.equal(lastCall2.method, "editMessageText");
-    assert.match(lastCall2.args[2], /الكمية المحددة:\s*\*\*2\*\*/);
-    assert.match(lastCall2.args[2], /الإجمالي المطلوب:\s*\*\*200.00 EGP\*\*/);
+    assert.match(lastCall2.args[2], /الكمية المحددة/);
+    assert.match(lastCall2.args[2], /2\*\* قطعة/);
+    assert.match(lastCall2.args[2], /200 EGP/);
 
     // 3. User clicks pay_wallet with quantity 2
     await handleCallback(api, store, [adminId], {
@@ -176,7 +178,7 @@ test("Bot: interactive quantity selection and wallet checkout flow", async () =>
   }
 });
 
-test("Bot: direct payment receipt flow automatically fulfills order on admin approval", async () => {
+test("Bot: direct payment menu does not include manual receipt proof and fulfills automatically via wallet SMS", async () => {
   const { store, cleanup } = fixture();
   try {
     const adminId = "1001";
@@ -194,44 +196,54 @@ test("Bot: direct payment receipt flow automatically fulfills order on admin app
 
     const api = makeApi();
 
-    // 1. User selects direct payment via receipt for 2 items (160 EGP)
+    // 1. User clicks pay_direct:product.id:2
     await handleCallback(api, store, [adminId], {
       id: "cb1",
       from: telegramUser(buyerId),
       message: { message_id: 12, chat: { id: Number(buyerId) } },
-      data: `direct_pay:receipt:${product.id}:2`,
+      data: `pay_direct:${product.id}:2`,
     });
 
-    assert.equal(store.getState(buyerId).state, "direct_order_receipt");
+    const menuCall = api.calls[api.calls.length - 1];
+    assert.equal(menuCall.method, "editMessageText");
+    const keyboard = menuCall.args[3].reply_markup.inline_keyboard;
+    const allButtonsText = keyboard.flat().map((b) => b.text).join(" ");
+    const allButtonsData = keyboard.flat().map((b) => b.callback_data).join(" ");
 
-    // 2. User sends receipt photo
+    // Ensure NO manual receipt / image proof option is shown
+    assert.doesNotMatch(allButtonsText, /إثبات|صورة|ايصال|إيصال/);
+    assert.doesNotMatch(allButtonsData, /receipt/);
+
+    // 2. User selects direct payment via wallet
+    await handleCallback(api, store, [adminId], {
+      id: "cb2",
+      from: telegramUser(buyerId),
+      message: { message_id: 12, chat: { id: Number(buyerId) } },
+      data: `direct_pay:wallet:${product.id}:2`,
+    });
+
+    assert.equal(store.getState(buyerId).state, "direct_order_phone");
+
+    // Simulate SMS arrival for 160 EGP (16000 piasters) from 01012345678
+    store.recordSmsTransfer({
+      sender: "VF-Cash",
+      senderPhone: "01012345678",
+      amountPiasters: 16000,
+      trxId: "vf_direct_order_test_99",
+      rawSms: "تم استلام 160 جنيه من 01012345678",
+    });
+
+    // 3. Buyer sends their phone number
     await handleMessage(api, store, [adminId], {
       chat: { id: Number(buyerId) },
       from: telegramUser(buyerId),
-      photo: [{ file_id: "photo_test_id" }],
+      text: "01012345678",
     });
 
-    // Admin receives notification photo with approval button
-    const adminPhotoCall = api.calls.find((c) => c.method === "sendPhoto" && c.args[0] === adminId);
-    assert.ok(adminPhotoCall);
-    assert.match(adminPhotoCall.args[2].caption, /إثبات تحويل مباشر لشراء منتج/);
-    assert.match(adminPhotoCall.args[2].caption, /الكمية: 2 قطعة/);
-
-    const approveButtonData = adminPhotoCall.args[2].reply_markup.inline_keyboard[0][0].callback_data;
-    assert.match(approveButtonData, /^admin:approve_manual_topup:\d+$/);
-
-    // 3. Admin clicks approve
-    await handleCallback(api, store, [adminId], {
-      id: "cb_adm",
-      from: telegramUser(adminId),
-      message: { message_id: 99, chat: { id: Number(adminId) } },
-      data: approveButtonData,
-    });
-
-    // Check that buyer received delivery of the 2 keys automatically!
+    // Check that buyer received delivery of both keys automatically without manual approval
     const buyerMessages = api.calls.filter((c) => c.method === "sendMessage" && String(c.args[0]) === buyerId);
     const buyerDelivery = buyerMessages[buyerMessages.length - 1];
-    assert.match(buyerDelivery.args[1], /تم اعتماد تحويلك وتسليم طلبك بنجاح/);
+    assert.match(buyerDelivery.args[1], /تم إتمام الشراء بنجاح/);
     assert.match(buyerDelivery.args[1], /الكمية: 2 قطعة/);
     assert.match(buyerDelivery.args[1], /STEAM-A1/);
     assert.match(buyerDelivery.args[1], /STEAM-B2/);

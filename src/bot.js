@@ -478,7 +478,6 @@ async function showDirectPaymentMenu(api, store, chatId, userId, product, quanti
     rows.push([{ text: "⚡ إنستاباي InstaPay (تحويل فوري)", callback_data: `direct_pay:instapay:${product.id}:${quantity}` }]);
     rows.push([{ text: "🪙 باينانس Binance Pay (تحويل UID)", callback_data: `direct_pay:binance:${product.id}:${quantity}` }]);
   }
-  rows.push([{ text: "🧾 إرسال إثبات التحويل اليدوي (صورة)", callback_data: `direct_pay:receipt:${product.id}:${quantity}` }]);
   rows.push([{ text: "🔙 عودة لتفاصيل الطلب", callback_data: `buy_qty:${product.id}:${quantity}` }]);
 
   await safeEditOrSend(api, chatId, messageId, panel("💸 تحويل قيمة المنتج مباشرة", lines), {
@@ -1366,56 +1365,12 @@ async function notifyAdminsAboutManualTopup(api, store, topup) {
 }
 
 async function handleManualTopupReceipt(api, store, chatId, userId, state, message) {
-  if (state.state !== "manual_topup_proof" && state.state !== "direct_order_receipt") return false;
+  if (state.state !== "manual_topup_proof") return false;
   const receipt = receiptFromMessage(message);
   if (!receipt) {
     await api.sendMessage(chatId, "📎 أرسل سكرين شوت أو ملف الإيصال فقط، أو استخدم /cancel للإلغاء.");
     return true;
   }
-
-  if (state.state === "direct_order_receipt") {
-    const { productId, quantity, totalPiasters } = state.data;
-    const product = store.getProduct(productId);
-    const note = JSON.stringify({ forOrder: true, productId, quantity, title: product?.title || "" });
-    const topup = store.createManualTopup(userId, "wallet", totalPiasters, note);
-    const submitted = store.submitManualTopupProof(userId, topup.id, receipt);
-    store.clearState(userId);
-
-    const admins = store.listSuperAdmins().filter((a) => a.status === "active");
-    const user = store.getUser(userId) || {};
-    const caption = panel("🧾 إثبات تحويل مباشر لشراء منتج!", [
-      `رقم الإيصال: #${submitted.id}`,
-      `👤 العميل: ${displayName(user)} (\`${userId}\`)`,
-      `📦 المنتج: #${product?.id} ${product?.title}`,
-      `🔢 الكمية: ${quantity} قطعة`,
-      `💰 المبلغ المطلوب: ${formatMoney(totalPiasters)}`,
-      "",
-      "💡 عند الاعتماد، سيتم إضافة الرصيد وتسليم المنتج تلقائياً للعميل!",
-    ]);
-    const options = {
-      caption,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "✅ اعتماد وتسليم الطلب للعميل", callback_data: `admin:approve_manual_topup:${submitted.id}` }],
-          [{ text: "❌ رفض مع سبب", callback_data: `admin:reject_manual_topup:${submitted.id}` }],
-        ],
-      },
-    };
-    await Promise.allSettled(admins.map((admin) => (
-      submitted.proof_kind === "photo"
-        ? api.sendPhoto(admin.telegram_id, submitted.proof_file_id, options)
-        : api.sendDocument(admin.telegram_id, submitted.proof_file_id, options)
-    )));
-
-    await api.sendMessage(chatId, panel("✅ تم إرسال إثبات التحويل بنجاح", [
-      `رقم الطلب: #${submitted.id}`,
-      `المنتج: ${product?.title} (عدد ${quantity})`,
-      `المبلغ: ${formatMoney(totalPiasters)}`,
-      "سيقوم الأدمن بمراجعة الإيصال واعتماد طلبك وتسليم المنتج لك فوراً.",
-    ]), { reply_markup: homeKeyboard(false) });
-    return true;
-  }
-
   const topup = store.submitManualTopupProof(userId, state.data.topupId, receipt);
   store.clearState(userId);
   await notifyAdminsAboutManualTopup(api, store, topup);
@@ -1690,7 +1645,7 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
     }
   }
 
-  if (state.state === "manual_topup_proof" || state.state === "direct_order_receipt") {
+  if (state.state === "manual_topup_proof") {
     await api.sendMessage(chatId, "📎 أرسل سكرين شوت أو ملف الإيصال فقط، أو استخدم /cancel للإلغاء.");
     return;
   }
@@ -1744,7 +1699,6 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
         reply_markup: {
           inline_keyboard: [
             [{ text: "🔄 إعادة المحاولة بالرقم", callback_data: `direct_pay:wallet:${state.data.productId}:${state.data.quantity}` }],
-            [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${state.data.productId}:${state.data.quantity}` }],
             [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
           ]
         }
@@ -1775,7 +1729,6 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
         reply_markup: {
           inline_keyboard: [
             [{ text: "🔄 إعادة المحاولة", callback_data: `direct_pay:instapay:${state.data.productId}:${state.data.quantity}` }],
-            [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${state.data.productId}:${state.data.quantity}` }],
             [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
           ]
         }
@@ -2763,7 +2716,6 @@ async function handleCallback(api, store, superAdmins, query) {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${product.id}:${quantity}` }],
           [{ text: "❌ إلغاء", callback_data: `buy_qty:${product.id}:${quantity}` }],
         ]
       }
@@ -2797,7 +2749,6 @@ async function handleCallback(api, store, superAdmins, query) {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${product.id}:${quantity}` }],
           [{ text: "❌ إلغاء", callback_data: `buy_qty:${product.id}:${quantity}` }],
         ]
       }
@@ -2823,37 +2774,16 @@ async function handleCallback(api, store, superAdmins, query) {
       `🆔 **معرف باينانس Binance UID للدفع:** \`${binanceReceiver}\``,
       `💱 **المعادل بـ USDT التقريبي:** **${usdtAmount} USDT** (سعر الصرف: 1 USDT = ${rate.toFixed(2)} EGP)`,
       "",
-      "📌 بعد التحويل، يمكنك إرسال إثبات التحويل (سكرين شوت) لتسليم طلبك فوراً أو التواصل مع الدعم الفني:",
+      "📌 بعد التحويل، يرجى التواصل مباشرة مع الدعم الفني لتأكيد التحويل وتسليم طلبك فوراً:",
     ];
     await safeEditOrSend(api, chatId, messageId, panel("🪙 تحويل مباشر عبر Binance Pay", lines), {
       parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${product.id}:${quantity}` }],
-          [adminContactButton("📞 التواصل مع الدعم")],
+          [adminContactButton("📞 التواصل مع الدعم لتأكيد الطلب")],
           [{ text: "🔙 عودة", callback_data: `pay_direct:${product.id}:${quantity}` }],
         ]
       }
-    });
-    return;
-  }
-
-  if (data.startsWith("direct_pay:receipt:")) {
-    const parts = data.split(":");
-    const productId = Number(parts[2]);
-    const quantity = Math.max(1, Number(parts[3]) || 1);
-    const product = store.getProduct(productId);
-    if (!product) return;
-    const unitPrice = store.effectivePrice(userId, product);
-    const totalPiasters = unitPrice * quantity;
-    store.setState(userId, "direct_order_receipt", { productId: product.id, quantity, totalPiasters });
-    await safeEditOrSend(api, chatId, messageId, panel("🧾 إرسال إثبات التحويل المباشر", [
-      `الطلب: ${product.title} (عدد ${quantity} قطعة)`,
-      `المبلغ المطلوب: ${formatMoney(totalPiasters)}`,
-      "",
-      "📎 أرسل الآن صورة أو ملف الإيصال (سكرين شوت التحويل) ليتم اعتماده وتسليم طلبك فوراً:",
-    ]), {
-      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: `buy_qty:${product.id}:${quantity}` }]] }
     });
     return;
   }
