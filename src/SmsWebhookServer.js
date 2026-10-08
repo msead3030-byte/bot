@@ -433,7 +433,53 @@ class SmsWebhookServer {
 
         if (claimResult.ok) {
           autoCredited = true;
-          // Notify user on Telegram
+          // Check if this was a direct product order payment
+          let directOrder = null;
+          try {
+            if (pendingTopup.raw_response_json && pendingTopup.raw_response_json.startsWith("{")) {
+              const meta = JSON.parse(pendingTopup.raw_response_json);
+              directOrder = meta.directOrder || null;
+            }
+          } catch { }
+
+          if (directOrder && directOrder.productId && this.api && pendingTopup.user_id) {
+            try {
+              const purchaseRes = this.store.purchase(pendingTopup.user_id, directOrder.productId, { quantity: directOrder.quantity || 1 });
+              if (purchaseRes.ok) {
+                const totalEgp = (purchaseRes.order.total_piasters / 100).toFixed(2);
+                const remBalanceEgp = (purchaseRes.balance / 100).toFixed(2);
+                let orderMsg = "";
+                if (purchaseRes.order.fulfillment_type === "ready_stock") {
+                  orderMsg = [
+                    "🎉 تم تأكيد تحويلك وتسليم طلبك بنجاح!",
+                    "━━━━━━━━━━━━━━━━━━━━━━━━",
+                    `📦 المنتج: ${purchaseRes.product.title}`,
+                    `🔢 الكمية: ${purchaseRes.order.quantity} قطعة`,
+                    `💰 الإجمالي: ${totalEgp} جنيه`,
+                    `💰 رصيدك المتبقي: ${remBalanceEgp} جنيه`,
+                    "",
+                    "🔑 بيانات ومحتوى المنتج المسلم لك:",
+                    purchaseRes.deliveryText
+                  ].join("\n");
+                } else {
+                  orderMsg = [
+                    "🎉 تم تأكيد تحويلك واستلام طلبك بنجاح!",
+                    "━━━━━━━━━━━━━━━━━━━━━━━━",
+                    `📦 المنتج: ${purchaseRes.product.title}`,
+                    `🔢 الكمية: ${purchaseRes.order.quantity} قطعة`,
+                    `💰 الإجمالي: ${totalEgp} جنيه`,
+                    "سيقوم الفريق بتجهيز وتسليم طلبك في أقرب وقت."
+                  ].join("\n");
+                }
+                this.api.sendMessage(pendingTopup.user_id, orderMsg).catch(() => { });
+                return;
+              }
+            } catch (pErr) {
+              console.error("[SMS Webhook] Direct order auto-purchase error:", pErr.message);
+            }
+          }
+
+          // Normal topup notification on Telegram
           if (this.api && pendingTopup.user_id) {
             const amountEgp = (parsed.amountPiasters / 100).toFixed(2);
             const balanceEgp = (claimResult.balance / 100).toFixed(2);

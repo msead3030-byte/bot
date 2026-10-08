@@ -44,10 +44,12 @@ function assertPositivePiasters(value, label = "Amount") {
   return amount;
 }
 
-function assertTopupAmount(amountPiasters) {
+function assertTopupAmount(amountPiasters, allowAnyPositive = false) {
   const amount = assertPositivePiasters(amountPiasters, "Top-up amount");
-  if (amount < MIN_TOPUP_PIASTERS || amount > MAX_TOPUP_PIASTERS) {
-    throw new Error("مبلغ الشحن يجب أن يكون بين 10 و 5,000 جنيه.");
+  if (!allowAnyPositive) {
+    if (amount < MIN_TOPUP_PIASTERS || amount > MAX_TOPUP_PIASTERS) {
+      throw new Error("مبلغ الشحن يجب أن يكون بين 10 و 5,000 جنيه.");
+    }
   }
   if (amount % 100 !== 0) throw new Error("يرجى إدخال مبلغ صحيح بالجنيه بدون كسور، مثال: 50 أو 100.");
   return amount;
@@ -545,9 +547,9 @@ class StoreService {
     }
   }
 
-  createAutoTopup(userId, amountPiasters, paymentMethod = "wallet", receiverNumber = "", senderIdentifier = "") {
+  createAutoTopup(userId, amountPiasters, paymentMethod = "wallet", receiverNumber = "", senderIdentifier = "", rawResponseJson = "") {
     const user = safeTelegramId(userId, "User ID");
-    const amount = assertTopupAmount(amountPiasters);
+    const amount = assertTopupAmount(amountPiasters, Boolean(rawResponseJson));
     if (!this.getUser(user)) this.ensureUser({ id: user });
     const at = nowIso();
     const orderId = orderRef("TOPUP");
@@ -562,9 +564,9 @@ class StoreService {
     const result = this.db.prepare(`
       INSERT INTO topups (
         user_id, amount_piasters, provider_order_id, payment_intent_id,
-        status, receiver_number, instructions, sender_identifier, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
-    `).run(user, amount, orderId, paymentIntentId, cleanText(receiverNumber, 50), cleanText(paymentMethod, 50), cleanSenderIdentifier, at, at);
+        status, receiver_number, instructions, sender_identifier, raw_response_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+    `).run(user, amount, orderId, paymentIntentId, cleanText(receiverNumber, 50), cleanText(paymentMethod, 50), cleanSenderIdentifier, cleanText(rawResponseJson, 4000), at, at);
 
     let topup = this.getTopup(result.lastInsertRowid);
 
@@ -1110,17 +1112,17 @@ class StoreService {
     `).all(Math.max(1, Math.min(100, Number(limit) || 20)));
   }
 
-  createManualTopup(userId, paymentMethod, amountPiasters) {
+  createManualTopup(userId, paymentMethod, amountPiasters, note = "") {
     const user = safeTelegramId(userId, "User ID");
     const method = cleanText(paymentMethod, 20).toLowerCase();
     if (!MANUAL_PAYMENT_METHODS.has(method)) throw new Error("Unsupported manual payment method.");
-    const amount = assertTopupAmount(amountPiasters);
+    const amount = assertTopupAmount(amountPiasters, Boolean(note));
     if (!this.getUser(user)) this.ensureUser({ id: user });
     const at = nowIso();
     const result = this.db.prepare(`
-      INSERT INTO manual_topups (user_id, payment_method, amount_piasters, status, created_at, updated_at)
-      VALUES (?, ?, ?, 'awaiting_proof', ?, ?)
-    `).run(user, method, amount, at, at);
+      INSERT INTO manual_topups (user_id, payment_method, amount_piasters, status, reviewer_note, created_at, updated_at)
+      VALUES (?, ?, ?, 'awaiting_proof', ?, ?, ?)
+    `).run(user, method, amount, cleanText(note, 2000), at, at);
     return this.getManualTopup(result.lastInsertRowid);
   }
 
@@ -1171,7 +1173,7 @@ class StoreService {
       );
       this.db.prepare(`
         UPDATE manual_topups
-        SET status = 'approved', reviewed_by = ?, reviewer_note = '', updated_at = ?
+        SET status = 'approved', reviewed_by = ?, updated_at = ?
         WHERE id = ?
       `).run(admin, at, topup.id);
       const fresh = this.getManualTopup(topup.id);
@@ -1352,30 +1354,40 @@ class StoreService {
     const user = safeTelegramId(userId, "User ID");
     const product = this.getProduct(productId);
     if (!product || product.status !== "active") return { ok: false, reason: "unavailable" };
-    const total = this.effectivePrice(user, product);
+    const unitPrice = this.effectivePrice(user, product);
+    const quantity = Math.max(1, parseInt(options.quantity, 10) || 1);
+    const total = unitPrice * quantity;
 
     const userInput = cleanText(options.userInput || "", 4000);
     if (product.fulfillment_type === "assisted" && !userInput) {
-      return { ok: false, reason: "needs_input", product };
+      return { ok: false, reason: "needs_input", product, quantity };
     }
 
     return this.db.transaction(() => {
-      const currentBalance = this.balance(user);
-      if (currentBalance < total) {
-        return { ok: false, reason: "insufficient_balance", balance: currentBalance, price: total };
-      }
-
-      let stock = null;
+      let stockItems = [];
       let deliveryText = "";
       if (product.fulfillment_type === "ready_stock") {
-        stock = this.db.prepare(`
+        stockItems = this.db.prepare(`
           SELECT * FROM stock_items
           WHERE product_id = ? AND status = 'available'
           ORDER BY id ASC
-          LIMIT 1
-        `).get(product.id);
-        if (!stock) return { ok: false, reason: "sold_out" };
-        deliveryText = this.secretBox.decrypt(stock.encrypted_payload);
+          LIMIT ?
+        `).all(product.id, quantity);
+        if (stockItems.length < quantity) {
+          return { ok: false, reason: "sold_out", available: stockItems.length, requested: quantity };
+        }
+        if (quantity === 1) {
+          deliveryText = this.secretBox.decrypt(stockItems[0].encrypted_payload);
+        } else {
+          deliveryText = stockItems
+            .map((item, idx) => `🔹 **[القطعة رقم ${idx + 1}]**:\n${this.secretBox.decrypt(item.encrypted_payload)}`)
+            .join("\n\n━━━━━━━━━━━━━━━━━━━━\n\n");
+        }
+      }
+
+      const currentBalance = this.balance(user);
+      if (currentBalance < total) {
+        return { ok: false, reason: "insufficient_balance", balance: currentBalance, price: total, unitPrice, quantity };
       }
 
       const ref = orderRef("ORD");
@@ -1387,17 +1399,18 @@ class StoreService {
           total_piasters, fulfillment_type, status, stock_item_id, user_input_encrypted,
           delivery_encrypted, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         ref,
         user,
         product.merchant_id,
         product.id,
-        total,
+        quantity,
+        unitPrice,
         total,
         product.fulfillment_type,
         status,
-        stock?.id || null,
+        stockItems[0]?.id || null,
         userInput ? this.secretBox.encrypt(userInput) : "",
         deliveryText ? this.secretBox.encrypt(deliveryText) : "",
         at,
@@ -1407,15 +1420,17 @@ class StoreService {
       this.db.prepare(`
         INSERT INTO ledger (user_id, type, amount_piasters, reference_type, reference_id, idempotency_key, note, created_at)
         VALUES (?, 'purchase', ?, 'order', ?, ?, ?, ?)
-      `).run(user, -total, String(orderId), `order:${ref}:purchase`, product.title, at);
+      `).run(user, -total, String(orderId), `order:${ref}:purchase`, quantity > 1 ? `${product.title} (x${quantity})` : product.title, at);
 
-      if (stock) {
-        const changed = this.db.prepare(`
-          UPDATE stock_items
-          SET status = 'sold', order_id = ?, sold_at = ?, updated_at = ?
-          WHERE id = ? AND status = 'available'
-        `).run(orderId, at, at, stock.id).changes;
-        if (!changed) throw new Error("Stock changed during purchase. Try again.");
+      if (stockItems.length > 0) {
+        for (const item of stockItems) {
+          const changed = this.db.prepare(`
+            UPDATE stock_items
+            SET status = 'sold', order_id = ?, sold_at = ?, updated_at = ?
+            WHERE id = ? AND status = 'available'
+          `).run(orderId, at, at, item.id).changes;
+          if (!changed) throw new Error("Stock changed during purchase. Try again.");
+        }
       }
 
       const order = this.getOrder(orderId);
@@ -1424,6 +1439,7 @@ class StoreService {
         order,
         product,
         deliveryText,
+        quantity,
         balance: this.balance(user),
       };
     })();
@@ -1589,8 +1605,8 @@ class StoreService {
         cleanText(reason || `استرجاع رصيد الطلب #${order.id} بواسطة الإدارة`, 200),
         at
       );
-      if (order.stock_item_id) {
-        this.db.prepare("UPDATE stock_items SET status = 'available', order_id = NULL, sold_at = NULL, updated_at = ? WHERE id = ?").run(at, order.stock_item_id);
+      if (order.stock_item_id || order.id) {
+        this.db.prepare("UPDATE stock_items SET status = 'available', order_id = NULL, sold_at = NULL, updated_at = ? WHERE order_id = ? OR id = ?").run(at, order.id, order.stock_item_id || -1);
       }
     })();
 

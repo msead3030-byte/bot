@@ -361,13 +361,130 @@ function productListKeyboard(products) {
 function productActions(product, isAvailable = true) {
   const rows = [];
   if (isAvailable) {
-    rows.push([{ text: `💳 شراء فوري الآن ╏ ${formatMoney(product.price_piasters)}`, callback_data: `buy:${product.id}` }]);
+    rows.push([{ text: `💳 شراء الآن ╏ ${formatMoney(product.price_piasters)}`, callback_data: `buy:${product.id}` }]);
   }
   rows.push([
     { text: "👈 عودة للمتجر", callback_data: "main:shop" },
     { text: "🏠 القائمة الرئيسية", callback_data: "main:home" },
   ]);
   return { inline_keyboard: rows };
+}
+
+function checkoutKeyboard(product, quantity, unitPrice, userBalance) {
+  const totalPiasters = unitPrice * quantity;
+  const maxQty = product.fulfillment_type === "ready_stock" ? (product.available_stock || 1) : 99;
+  const rows = [];
+
+  // أزرار التحكم بالكمية إذا كان هناك إمكانية لاختيار أكثر من قطعة
+  if (maxQty > 1) {
+    const counterRow = [];
+    if (quantity > 1) {
+      counterRow.push({ text: "➖ تقليل", callback_data: `buy_qty:${product.id}:${quantity - 1}` });
+    } else {
+      counterRow.push({ text: "⛔", callback_data: "noop" });
+    }
+    counterRow.push({ text: `🔢 الكمية: ${quantity}`, callback_data: "noop" });
+    if (quantity < maxQty) {
+      counterRow.push({ text: "➕ زيادة", callback_data: `buy_qty:${product.id}:${quantity + 1}` });
+    } else {
+      counterRow.push({ text: "⛔ الحد الأقصى", callback_data: "noop" });
+    }
+    rows.push(counterRow);
+
+    const quickRow = [];
+    [1, 2, 3, 5, 10].forEach((q) => {
+      if (q <= maxQty && q !== quantity) {
+        quickRow.push({ text: `${q}`, callback_data: `buy_qty:${product.id}:${q}` });
+      }
+    });
+    quickRow.push({ text: "✍️ كمية أخرى", callback_data: `buy_custom:${product.id}` });
+    rows.push(quickRow);
+  }
+
+  // خيار 1: الشراء من رصيد المحفظة
+  if (userBalance >= totalPiasters) {
+    rows.push([{ text: `💼 الشراء من رصيد المحفظة ╏ ${formatMoney(totalPiasters)}`, callback_data: `pay_wallet:${product.id}:${quantity}` }]);
+  } else {
+    rows.push([{ text: `💼 الشراء من المحفظة (ينقصك ${formatMoney(totalPiasters - userBalance)})`, callback_data: `pay_wallet_insufficient:${product.id}:${quantity}` }]);
+  }
+
+  // خيار 2: تحويل قيمة المنتج مباشرة
+  rows.push([{ text: `💸 تحويل قيمة المنتج مباشرة ╏ ${formatMoney(totalPiasters)}`, callback_data: `pay_direct:${product.id}:${quantity}` }]);
+
+  // خيارات التنقل
+  rows.push([
+    { text: "👈 عودة للمنتج", callback_data: `product:${product.id}` },
+    { text: "🏠 الرئيسية", callback_data: "main:home" },
+  ]);
+
+  return { inline_keyboard: rows };
+}
+
+async function showCheckoutMenu(api, store, chatId, userId, product, quantity = 1, messageId = null) {
+  if (!product || product.status !== "active") {
+    await safeEditOrSend(api, chatId, messageId, "⚠️ هذا المنتج غير متاح حالياً.", { reply_markup: homeKeyboard(false) });
+    return;
+  }
+  const isReady = product.fulfillment_type === "ready_stock";
+  const availableStock = product.available_stock || 0;
+  if (isReady && availableStock <= 0) {
+    await safeEditOrSend(api, chatId, messageId, panel("🔴 نفد المخزون", ["عذراً، هذا المنتج غير متوفر في المخزون حالياً."]), { reply_markup: homeKeyboard(false) });
+    return;
+  }
+
+  const maxQty = isReady ? availableStock : 99;
+  const safeQty = Math.max(1, Math.min(maxQty, Number(quantity) || 1));
+  const unitPrice = store.effectivePrice(userId, product);
+  const totalPiasters = unitPrice * safeQty;
+  const userBalance = store.balance(userId);
+
+  const lines = [
+    `📦 **المنتج:** ${product.title}`,
+    `💵 **سعر القطعة:** ${formatMoney(unitPrice)}`,
+    `🔢 **الكمية المحددة:** **${safeQty}** قطعة`,
+    `💰 **الإجمالي المطلوب:** **${formatMoney(totalPiasters)}**`,
+    `💼 **رصيدك الحالي:** ${formatMoney(userBalance)}`,
+  ];
+
+  if (isReady) {
+    lines.push(`📦 **المخزون المتاح:** ${availableStock} قطعة`);
+  } else {
+    lines.push(`🛠️ **نوع التسليم:** تنفيذ خدمة بمساعدة`);
+  }
+  lines.push("");
+  lines.push("👇 يمكنك تعديل الكمية بالأزرار أو اختيار وسيلة الدفع المناسبة:");
+
+  const keyboard = checkoutKeyboard(product, safeQty, unitPrice, userBalance);
+  await safeEditOrSend(api, chatId, messageId, panel("🛍️ تحديد الكمية وطريقة الدفع", lines), {
+    parse_mode: "Markdown",
+    reply_markup: keyboard,
+  });
+}
+
+async function showDirectPaymentMenu(api, store, chatId, userId, product, quantity, messageId = null) {
+  const unitPrice = store.effectivePrice(userId, product);
+  const totalPiasters = unitPrice * quantity;
+  const lines = [
+    `📦 **المنتج:** ${product.title}`,
+    `🔢 **الكمية:** **${quantity}** قطعة`,
+    `💰 **المبلغ المطلوب تحويله:** **${formatMoney(totalPiasters)}**`,
+    "",
+    "اختر وسيلة التحويل المباشر المناسبة لك لتسليم طلبك فوراً:",
+  ];
+
+  const rows = [];
+  if (isAutoTopupEnabled()) {
+    rows.push([{ text: "📱 محفظة كاش (فودافون/اتصالات/أورنج/وي)", callback_data: `direct_pay:wallet:${product.id}:${quantity}` }]);
+    rows.push([{ text: "⚡ إنستاباي InstaPay (تحويل فوري)", callback_data: `direct_pay:instapay:${product.id}:${quantity}` }]);
+    rows.push([{ text: "🪙 باينانس Binance Pay (تحويل UID)", callback_data: `direct_pay:binance:${product.id}:${quantity}` }]);
+  }
+  rows.push([{ text: "🧾 إرسال إثبات التحويل اليدوي (صورة)", callback_data: `direct_pay:receipt:${product.id}:${quantity}` }]);
+  rows.push([{ text: "🔙 عودة لتفاصيل الطلب", callback_data: `buy_qty:${product.id}:${quantity}` }]);
+
+  await safeEditOrSend(api, chatId, messageId, panel("💸 تحويل قيمة المنتج مباشرة", lines), {
+    parse_mode: "Markdown",
+    reply_markup: { inline_keyboard: rows },
+  });
 }
 
 function merchantProductKeyboard(product) {
@@ -1136,15 +1253,19 @@ async function handlePurchaseResult(api, store, superAdmins, chatId, userId, res
       keyboardRows.push([{ text: "🏠 القائمة الرئيسية", callback_data: "main:home" }]);
 
       await api.sendMessage(chatId, panel("⚠️ رصيد المحفظة غير كافٍ", [
-        `سعر المنتج: ${formatMoney(result.price)}`,
+        `سعر الطلب: ${formatMoney(result.price)}`,
         `رصيدك الحالي: ${formatMoney(result.balance)}`,
+        `المبلغ المطلوب إضافته: ${formatMoney(result.price - result.balance)}`,
         "",
-        "💡 يرجى التواصل مع الأدمن لشحن محفظتك وإتمام عملية الشراء.",
+        "💡 يرجى تحويل قيمة الطلب مباشرة أو شحن محفظتك لإتمام العملية.",
       ]), { reply_markup: { inline_keyboard: keyboardRows } });
       return;
     }
     if (result.reason === "sold_out") {
-      await api.sendMessage(chatId, panel("🔴 نفد المخزون", ["عذراً، هذا المنتج غير متوفر في المخزون حالياً."]), { reply_markup: homeKeyboard(false) });
+      const msg = result.requested && result.available !== undefined
+        ? `عذراً، الكمية المطلوبة (${result.requested}) غير متوفرة. المتبقي في المخزون: ${result.available} قطعة فقط.`
+        : "عذراً، هذا المنتج غير متوفر في المخزون حالياً.";
+      await api.sendMessage(chatId, panel("🔴 نفد المخزون", [msg]), { reply_markup: homeKeyboard(false) });
       return;
     }
     await api.sendMessage(chatId, panel("❌ تعذر إتمام الطلب", ["المنتج غير متاح حالياً."]), { reply_markup: homeKeyboard(false) });
@@ -1154,6 +1275,9 @@ async function handlePurchaseResult(api, store, superAdmins, chatId, userId, res
   if (result.order.fulfillment_type === "ready_stock") {
     await api.sendMessage(chatId, panel("🎉 تم إتمام الشراء بنجاح!", [
       `رقم الطلب: #${result.order.id}`,
+      `المنتج: ${result.product.title}`,
+      `الكمية: ${result.order.quantity || 1} قطعة`,
+      `الإجمالي: ${formatMoney(result.order.total_piasters)}`,
       `رصيدك الجديد: ${formatMoney(result.balance)}`,
       "",
       "🔑 وبيانات المنتج/الكود الخاص بك:",
@@ -1165,9 +1289,33 @@ async function handlePurchaseResult(api, store, superAdmins, chatId, userId, res
   await notifyStaffAboutAssistedOrder(api, store, superAdmins, result);
   await api.sendMessage(chatId, panel("✅ تم استلام طلبك بنجاح", [
     `رقم الطلب: #${result.order.id}`,
+    `المنتج: ${result.product.title}`,
+    `الكمية: ${result.order.quantity || 1} قطعة`,
+    `الإجمالي: ${formatMoney(result.order.total_piasters)}`,
     `رصيدك المتبقي: ${formatMoney(result.balance)}`,
     "سيقوم البائع بمراجعة متطلباتك وتسليم المنتج لك هنا فور الجاهزية.",
   ]), { reply_markup: homeKeyboard(false) });
+}
+
+async function deliverDirectOrderIfAny(api, store, superAdmins, userId, topup) {
+  let directOrder = null;
+  try {
+    if (topup && topup.raw_response_json && topup.raw_response_json.startsWith("{")) {
+      const meta = JSON.parse(topup.raw_response_json);
+      directOrder = meta.directOrder || null;
+    }
+  } catch { }
+
+  if (directOrder && directOrder.productId) {
+    try {
+      const purchaseResult = store.purchase(userId, directOrder.productId, { quantity: directOrder.quantity || 1 });
+      await handlePurchaseResult(api, store, superAdmins, userId, userId, purchaseResult);
+      return true;
+    } catch (e) {
+      console.error("[deliverDirectOrderIfAny] Error:", e.message);
+    }
+  }
+  return false;
 }
 
 async function startManualTopup(api, store, chatId, userId, paymentMethod, amountPiasters) {
@@ -1218,12 +1366,56 @@ async function notifyAdminsAboutManualTopup(api, store, topup) {
 }
 
 async function handleManualTopupReceipt(api, store, chatId, userId, state, message) {
-  if (state.state !== "manual_topup_proof") return false;
+  if (state.state !== "manual_topup_proof" && state.state !== "direct_order_receipt") return false;
   const receipt = receiptFromMessage(message);
   if (!receipt) {
     await api.sendMessage(chatId, "📎 أرسل سكرين شوت أو ملف الإيصال فقط، أو استخدم /cancel للإلغاء.");
     return true;
   }
+
+  if (state.state === "direct_order_receipt") {
+    const { productId, quantity, totalPiasters } = state.data;
+    const product = store.getProduct(productId);
+    const note = JSON.stringify({ forOrder: true, productId, quantity, title: product?.title || "" });
+    const topup = store.createManualTopup(userId, "wallet", totalPiasters, note);
+    const submitted = store.submitManualTopupProof(userId, topup.id, receipt);
+    store.clearState(userId);
+
+    const admins = store.listSuperAdmins().filter((a) => a.status === "active");
+    const user = store.getUser(userId) || {};
+    const caption = panel("🧾 إثبات تحويل مباشر لشراء منتج!", [
+      `رقم الإيصال: #${submitted.id}`,
+      `👤 العميل: ${displayName(user)} (\`${userId}\`)`,
+      `📦 المنتج: #${product?.id} ${product?.title}`,
+      `🔢 الكمية: ${quantity} قطعة`,
+      `💰 المبلغ المطلوب: ${formatMoney(totalPiasters)}`,
+      "",
+      "💡 عند الاعتماد، سيتم إضافة الرصيد وتسليم المنتج تلقائياً للعميل!",
+    ]);
+    const options = {
+      caption,
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "✅ اعتماد وتسليم الطلب للعميل", callback_data: `admin:approve_manual_topup:${submitted.id}` }],
+          [{ text: "❌ رفض مع سبب", callback_data: `admin:reject_manual_topup:${submitted.id}` }],
+        ],
+      },
+    };
+    await Promise.allSettled(admins.map((admin) => (
+      submitted.proof_kind === "photo"
+        ? api.sendPhoto(admin.telegram_id, submitted.proof_file_id, options)
+        : api.sendDocument(admin.telegram_id, submitted.proof_file_id, options)
+    )));
+
+    await api.sendMessage(chatId, panel("✅ تم إرسال إثبات التحويل بنجاح", [
+      `رقم الطلب: #${submitted.id}`,
+      `المنتج: ${product?.title} (عدد ${quantity})`,
+      `المبلغ: ${formatMoney(totalPiasters)}`,
+      "سيقوم الأدمن بمراجعة الإيصال واعتماد طلبك وتسليم المنتج لك فوراً.",
+    ]), { reply_markup: homeKeyboard(false) });
+    return true;
+  }
+
   const topup = store.submitManualTopupProof(userId, state.data.topupId, receipt);
   store.clearState(userId);
   await notifyAdminsAboutManualTopup(api, store, topup);
@@ -1253,6 +1445,8 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
     // If pre-arrival SMS transfer was found (arrived up to 5 minutes before), credit immediately!
     if (topup.autoClaimed) {
       store.clearState(userId);
+      const delivered = await deliverDirectOrderIfAny(api, store, superAdmins, userId, topup);
+      if (delivered) return;
       const senderPhone = topup.transfer?.sender_phone || topup.sender_identifier || "";
       const trxId = topup.transfer?.trx_id ? topup.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
       const lines = [
@@ -1392,6 +1586,8 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       const result = store.verifyAndClaimSmsTopup(userId, topupId, cleanSender);
       if (result.ok) {
         store.clearState(userId);
+        const delivered = await deliverDirectOrderIfAny(api, store, superAdmins, userId, result.topup);
+        if (delivered) return;
         const senderPhone = result.transfer?.sender_phone || cleanSender;
         const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
         const lines = [
@@ -1445,6 +1641,8 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
       const result = store.verifyAndClaimInstaPayTopup(userId, topupId, cleanSender);
       if (result.ok) {
         store.clearState(userId);
+        const delivered = await deliverDirectOrderIfAny(api, store, superAdmins, userId, result.topup);
+        if (delivered) return;
         const senderIdentifier = result.transfer?.sender_name || result.transfer?.sender_phone || cleanSender;
         const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
         const lines = [
@@ -1492,9 +1690,98 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
     }
   }
 
-  if (state.state === "manual_topup_proof") {
+  if (state.state === "manual_topup_proof" || state.state === "direct_order_receipt") {
     await api.sendMessage(chatId, "📎 أرسل سكرين شوت أو ملف الإيصال فقط، أو استخدم /cancel للإلغاء.");
     return;
+  }
+
+  if (state.state === "buy_custom_qty") {
+    const rawQty = text.trim();
+    const qty = parseInt(rawQty, 10);
+    const product = store.getProduct(state.data.productId);
+    if (!product || product.status !== "active") {
+      store.clearState(userId);
+      await api.sendMessage(chatId, "⚠️ المنتج غير متوفر حالياً.", { reply_markup: homeKeyboard(false) });
+      return;
+    }
+    const maxQty = product.fulfillment_type === "ready_stock" ? (product.available_stock || 1) : 99;
+    if (isNaN(qty) || qty <= 0) {
+      await api.sendMessage(chatId, "⚠️ يرجى إرسال رقم صحيح للكمية (مثال: 2 أو 5):", {
+        reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] }
+      });
+      return;
+    }
+    if (qty > maxQty) {
+      await api.sendMessage(chatId, `⚠️ أقصى كمية متاحة حالياً هي ${maxQty} قطعة. يرجى إدخال كمية مناسبة:`, {
+        reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] }
+      });
+      return;
+    }
+    store.clearState(userId);
+    await showCheckoutMenu(api, store, chatId, userId, product, qty);
+    return;
+  }
+
+  if (state.state === "direct_order_phone") {
+    const cleanSender = text.trim();
+    if (!cleanSender) {
+      await api.sendMessage(chatId, "⚠️ يرجى إرسال رقم المحفظة أو كود العملية من رسالة التحويل:");
+      return;
+    }
+    try {
+      const claimRes = store.verifyAndClaimSmsTopup(userId, state.data.topupId, cleanSender);
+      if (claimRes.ok) {
+        store.clearState(userId);
+        const purchaseRes = store.purchase(userId, state.data.productId, { quantity: state.data.quantity });
+        await handlePurchaseResult(api, store, superAdmins, chatId, userId, purchaseRes);
+        return;
+      }
+    } catch (err) {
+      await api.sendMessage(chatId, panel("⚠️ تعذر التحقق من التحويل", [
+        err.message || "لم نتمكن من مطابقة التحويل بعد.",
+        "تأكد من رقم المحفظة أو انتظر دقيقة وأعد المحاولة.",
+      ]), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔄 إعادة المحاولة بالرقم", callback_data: `direct_pay:wallet:${state.data.productId}:${state.data.quantity}` }],
+            [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${state.data.productId}:${state.data.quantity}` }],
+            [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
+          ]
+        }
+      });
+      return;
+    }
+  }
+
+  if (state.state === "direct_order_instapay_name") {
+    const cleanSender = text.trim();
+    if (!cleanSender) {
+      await api.sendMessage(chatId, "⚠️ يرجى إرسال اسم الراسل المسجل في إنستاباي أو كود العملية:");
+      return;
+    }
+    try {
+      const claimRes = store.verifyAndClaimInstaPayTopup(userId, state.data.topupId, cleanSender);
+      if (claimRes.ok) {
+        store.clearState(userId);
+        const purchaseRes = store.purchase(userId, state.data.productId, { quantity: state.data.quantity });
+        await handlePurchaseResult(api, store, superAdmins, chatId, userId, purchaseRes);
+        return;
+      }
+    } catch (err) {
+      await api.sendMessage(chatId, panel("⚠️ تعذر التحقق من تحويل إنستاباي", [
+        err.message || "لم يتم العثور على رسالة التحويل بالاسم المدخل بعد.",
+        "تأكد من صحة الاسم كما يظهر في إشعار البنك أو انتظر لحظات وأعد المحاولة.",
+      ]), {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔄 إعادة المحاولة", callback_data: `direct_pay:instapay:${state.data.productId}:${state.data.quantity}` }],
+            [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${state.data.productId}:${state.data.quantity}` }],
+            [{ text: "❌ إلغاء", callback_data: "flow:cancel" }],
+          ]
+        }
+      });
+      return;
+    }
   }
 
   if (state.state === "search_query") {
@@ -1510,7 +1797,7 @@ async function handleStateMessage(api, store, superAdmins, chatId, from, state, 
 
   if (state.state === "assisted_input") {
     store.clearState(userId);
-    const result = store.purchase(userId, state.data.productId, { userInput: text });
+    const result = store.purchase(userId, state.data.productId, { userInput: text, quantity: state.data.quantity || 1 });
     await handlePurchaseResult(api, store, superAdmins, chatId, userId, result);
     return;
   }
@@ -2030,6 +2317,8 @@ async function handleCallback(api, store, superAdmins, query) {
     }
   }
 
+  if (data === "noop") return;
+
   if (data === "flow:cancel") {
     store.clearState(userId);
     await safeEditOrSend(api, chatId, messageId, "❌ تم الإلغاء.", { reply_markup: homeKeyboard(stf.isSuperAdmin || stf.isMerchant) });
@@ -2181,6 +2470,8 @@ async function handleCallback(api, store, superAdmins, query) {
       const result = store.verifyAndClaimSmsTopup(userId, topupId, topup.sender_identifier);
       if (result.ok) {
         store.clearState(userId);
+        const delivered = await deliverDirectOrderIfAny(api, store, superAdmins, userId, result.topup);
+        if (delivered) return;
         const senderPhone = result.transfer?.sender_phone || topup.sender_identifier;
         const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
         const lines = [
@@ -2227,6 +2518,8 @@ async function handleCallback(api, store, superAdmins, query) {
       const result = store.verifyAndClaimInstaPayTopup(userId, topupId, topup.sender_identifier);
       if (result.ok) {
         store.clearState(userId);
+        const delivered = await deliverDirectOrderIfAny(api, store, superAdmins, userId, result.topup);
+        if (delivered) return;
         const senderName = result.transfer?.sender_name || topup.sender_identifier;
         const trxId = result.transfer?.trx_id ? result.transfer.trx_id.replace(/^[^_]+_/, "") : "مكتمل";
         const lines = [
@@ -2337,35 +2630,230 @@ async function handleCallback(api, store, superAdmins, query) {
 
   if (data.startsWith("buy:")) {
     const product = store.getProduct(Number(data.split(":")[1]));
+    await showCheckoutMenu(api, store, chatId, userId, product, 1, messageId);
+    return;
+  }
+
+  if (data.startsWith("buy_qty:")) {
+    const parts = data.split(":");
+    const productId = Number(parts[1]);
+    const qty = Number(parts[2]) || 1;
+    const product = store.getProduct(productId);
+    await showCheckoutMenu(api, store, chatId, userId, product, qty, messageId);
+    return;
+  }
+
+  if (data.startsWith("buy_custom:")) {
+    const productId = Number(data.split(":")[1]);
+    const product = store.getProduct(productId);
+    if (!product || product.status !== "active") {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ المنتج غير متوفر حالياً.", { reply_markup: homeKeyboard(false) });
+      return;
+    }
+    store.setState(userId, "buy_custom_qty", { productId });
+    await safeEditOrSend(api, chatId, messageId, panel("✍️ إدخال كمية مخصصة", [
+      `المنتج: ${product.title}`,
+      "",
+      "✏️ أرسل عدد القطع التي تريد شراءها بالأرقام في رسالة هنا (مثال: 3 أو 5):",
+    ]), {
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: `buy_qty:${productId}:1` }]] }
+    });
+    return;
+  }
+
+  if (data.startsWith("pay_wallet:")) {
+    const parts = data.split(":");
+    const productId = Number(parts[1]);
+    const quantity = Math.max(1, Number(parts[2]) || 1);
+    const product = store.getProduct(productId);
+    if (!product || product.status !== "active") {
+      await safeEditOrSend(api, chatId, messageId, "⚠️ المنتج غير متاح حالياً.", { reply_markup: homeKeyboard(false) });
+      return;
+    }
+
+    if (product.fulfillment_type === "assisted") {
+      store.setState(userId, "assisted_input", { productId: product.id, quantity });
+      const unitPrice = store.effectivePrice(userId, product);
+      await safeEditOrSend(api, chatId, messageId, panel("📝 تفاصيل الطلب المتطلب", [
+        `المنتج: ${product.title}`,
+        `الكمية: ${quantity} قطعة`,
+        `الإجمالي: ${formatMoney(unitPrice * quantity)}`,
+        "",
+        "📌 يرجى إرسال بياناتك أو الإيميل أو متطلباتك في رسالة واحدة هنا:",
+      ]), { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: `buy_qty:${productId}:${quantity}` }]] } });
+      return;
+    }
+
+    const result = store.purchase(userId, product.id, { quantity });
+    await handlePurchaseResult(api, store, superAdmins, chatId, userId, result);
+    return;
+  }
+
+  if (data.startsWith("pay_wallet_insufficient:")) {
+    const parts = data.split(":");
+    const productId = Number(parts[1]);
+    const quantity = Math.max(1, Number(parts[2]) || 1);
+    const product = store.getProduct(productId);
+    if (!product) return;
+    const unitPrice = store.effectivePrice(userId, product);
+    const totalPiasters = unitPrice * quantity;
+    const balance = store.balance(userId);
+    await safeEditOrSend(api, chatId, messageId, panel("⚠️ رصيد المحفظة غير كافٍ", [
+      `المنتج: ${product.title}`,
+      `الكمية: ${quantity} قطعة`,
+      `المبلغ المطلوب: ${formatMoney(totalPiasters)}`,
+      `رصيدك الحالي: ${formatMoney(balance)}`,
+      `المبلغ الناقص: ${formatMoney(totalPiasters - balance)}`,
+      "",
+      "💡 يمكنك تحويل قيمة المنتج مباشرة وسيقوم البوت بتسليمه لك فوراً:",
+    ]), {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: `💸 تحويل قيمة المنتج مباشرة ╏ ${formatMoney(totalPiasters)}`, callback_data: `pay_direct:${productId}:${quantity}` }],
+          [{ text: "⚡ شحن رصيد المحفظة", callback_data: "main:topup" }],
+          [{ text: "🔙 عودة لتفاصيل الطلب", callback_data: `buy_qty:${productId}:${quantity}` }],
+        ]
+      }
+    });
+    return;
+  }
+
+  if (data.startsWith("pay_direct:")) {
+    const parts = data.split(":");
+    const productId = Number(parts[1]);
+    const quantity = Math.max(1, Number(parts[2]) || 1);
+    const product = store.getProduct(productId);
     if (!product) {
       await safeEditOrSend(api, chatId, messageId, "⚠️ المنتج غير موجود.", { reply_markup: homeKeyboard(false) });
       return;
     }
-    if (product.fulfillment_type === "assisted") {
-      store.setState(userId, "assisted_input", { productId: product.id });
-      await safeEditOrSend(api, chatId, messageId, panel("📝 تفاصيل الطلب المتطلب", [
-        `المنتج: ${product.title}`,
-        `السعر: ${formatMoney(store.effectivePrice(userId, product))}`,
-        "",
-        "📌 يرجى إرسال بياناتك أو الإيميل أو متطلباتك في رسالة واحدة هنا:",
-      ]), { reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: "flow:cancel" }]] } });
+    await showDirectPaymentMenu(api, store, chatId, userId, product, quantity, messageId);
+    return;
+  }
+
+  if (data.startsWith("direct_pay:wallet:")) {
+    const parts = data.split(":");
+    const productId = Number(parts[2]);
+    const quantity = Math.max(1, Number(parts[3]) || 1);
+    const product = store.getProduct(productId);
+    if (!product) return;
+    const unitPrice = store.effectivePrice(userId, product);
+    const totalPiasters = unitPrice * quantity;
+    const receiver = autoTopupReceiver();
+    const meta = { directOrder: { productId: product.id, quantity } };
+    const topup = store.createAutoTopup(userId, totalPiasters, "wallet", receiver, "", JSON.stringify(meta));
+
+    if (topup.autoClaimed) {
+      const purchaseRes = store.purchase(userId, product.id, { quantity });
+      await handlePurchaseResult(api, store, superAdmins, chatId, userId, purchaseRes);
       return;
     }
-    // تأكيد قبل الشراء
-    const price = store.effectivePrice(userId, product);
-    await safeEditOrSend(api, chatId, messageId, panel("⚠️ تأكيد الشراء", [
-      `المنتج: ${product.title}`,
-      `السعر: ${formatMoney(price)}`,
-      `رصيدك الحالي: ${formatMoney(store.balance(userId))}`,
+
+    store.setState(userId, "direct_order_phone", { topupId: topup.id, productId: product.id, quantity });
+    const lines = [
+      `📦 **الطلب:** ${product.title} (عدد ${quantity} قطعة)`,
+      `💵 **المبلغ المطلوب تحويله بالظبط:** \`${formatMoney(totalPiasters)}\``,
+      `📱 **رقم المحفظة للتحويل:** \`${receiver}\``,
       "",
-      "هل تريد المتابعة وإتمام الشراء؟",
-    ]), {
+      "📌 خطوات إتمام التحويل:",
+      `1. قم بتحويل مبلغ **${formatMoney(totalPiasters)}** إلى رقم المحفظة أعلاه.`,
+      "2. أرسل الآن في رسالة هنا رقم المحفظة أو الهاتف الذي حوّلت منه أو كود العملية من رسالة التحويل لتسليم طلبك فوراً:",
+    ];
+    await safeEditOrSend(api, chatId, messageId, panel("📱 التحويل عبر محفظة كاش", lines), {
+      parse_mode: "Markdown",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "✅ تأكيد الشراء", callback_data: `confirm_buy:${product.id}` }],
-          [{ text: "❌ إلغاء", callback_data: `product:${product.id}` }],
+          [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${product.id}:${quantity}` }],
+          [{ text: "❌ إلغاء", callback_data: `buy_qty:${product.id}:${quantity}` }],
         ]
       }
+    });
+    return;
+  }
+
+  if (data.startsWith("direct_pay:instapay:")) {
+    const parts = data.split(":");
+    const productId = Number(parts[2]);
+    const quantity = Math.max(1, Number(parts[3]) || 1);
+    const product = store.getProduct(productId);
+    if (!product) return;
+    const unitPrice = store.effectivePrice(userId, product);
+    const totalPiasters = unitPrice * quantity;
+    const receiver = String(process.env.AUTO_TOPUP_INSTAPAY_RECEIVER || process.env.AUTO_TOPUP_WALLET_RECEIVER || "01000000000").trim();
+    const meta = { directOrder: { productId: product.id, quantity } };
+    const topup = store.createAutoTopup(userId, totalPiasters, "wallet", receiver, "", JSON.stringify(meta));
+
+    store.setState(userId, "direct_order_instapay_name", { topupId: topup.id, productId: product.id, quantity });
+    const lines = [
+      `📦 **الطلب:** ${product.title} (عدد ${quantity} قطعة)`,
+      `💵 **المبلغ المطلوب تحويله بالظبط:** \`${formatMoney(totalPiasters)}\``,
+      `⚡ **عنوان / رقم إنستاباي:** \`${receiver}\``,
+      "",
+      "📌 خطوات إتمام التحويل:",
+      `1. قم بتحويل مبلغ **${formatMoney(totalPiasters)}** عبر إنستاباي إلى العنوان أعلاه.`,
+      "2. أرسل الآن في رسالة هنا اسم الراسل المسجل في إنستاباي أو كود العملية لتسليم طلبك فوراً:",
+    ];
+    await safeEditOrSend(api, chatId, messageId, panel("⚡ تحويل فوري عبر InstaPay", lines), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${product.id}:${quantity}` }],
+          [{ text: "❌ إلغاء", callback_data: `buy_qty:${product.id}:${quantity}` }],
+        ]
+      }
+    });
+    return;
+  }
+
+  if (data.startsWith("direct_pay:binance:")) {
+    const parts = data.split(":");
+    const productId = Number(parts[2]);
+    const quantity = Math.max(1, Number(parts[3]) || 1);
+    const product = store.getProduct(productId);
+    if (!product) return;
+    const unitPrice = store.effectivePrice(userId, product);
+    const totalPiasters = unitPrice * quantity;
+    const binanceReceiver = String(process.env.MANUAL_BINANCE_RECEIVER || "1221301796").trim();
+    const rate = binancePayClient.getUsdtRate();
+    const totalEgp = totalPiasters / 100;
+    const usdtAmount = (totalEgp / rate).toFixed(2);
+    const lines = [
+      `📦 **الطلب:** ${product.title} (عدد ${quantity} قطعة)`,
+      `💰 **القيمة بالجنيه:** ${formatMoney(totalPiasters)}`,
+      `🆔 **معرف باينانس Binance UID للدفع:** \`${binanceReceiver}\``,
+      `💱 **المعادل بـ USDT التقريبي:** **${usdtAmount} USDT** (سعر الصرف: 1 USDT = ${rate.toFixed(2)} EGP)`,
+      "",
+      "📌 بعد التحويل، يمكنك إرسال إثبات التحويل (سكرين شوت) لتسليم طلبك فوراً أو التواصل مع الدعم الفني:",
+    ];
+    await safeEditOrSend(api, chatId, messageId, panel("🪙 تحويل مباشر عبر Binance Pay", lines), {
+      parse_mode: "Markdown",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🧾 إرسال إثبات التحويل (صورة)", callback_data: `direct_pay:receipt:${product.id}:${quantity}` }],
+          [adminContactButton("📞 التواصل مع الدعم")],
+          [{ text: "🔙 عودة", callback_data: `pay_direct:${product.id}:${quantity}` }],
+        ]
+      }
+    });
+    return;
+  }
+
+  if (data.startsWith("direct_pay:receipt:")) {
+    const parts = data.split(":");
+    const productId = Number(parts[2]);
+    const quantity = Math.max(1, Number(parts[3]) || 1);
+    const product = store.getProduct(productId);
+    if (!product) return;
+    const unitPrice = store.effectivePrice(userId, product);
+    const totalPiasters = unitPrice * quantity;
+    store.setState(userId, "direct_order_receipt", { productId: product.id, quantity, totalPiasters });
+    await safeEditOrSend(api, chatId, messageId, panel("🧾 إرسال إثبات التحويل المباشر", [
+      `الطلب: ${product.title} (عدد ${quantity} قطعة)`,
+      `المبلغ المطلوب: ${formatMoney(totalPiasters)}`,
+      "",
+      "📎 أرسل الآن صورة أو ملف الإيصال (سكرين شوت التحويل) ليتم اعتماده وتسليم طلبك فوراً:",
+    ]), {
+      reply_markup: { inline_keyboard: [[{ text: "❌ إلغاء", callback_data: `buy_qty:${product.id}:${quantity}` }]] }
     });
     return;
   }
@@ -2376,7 +2864,7 @@ async function handleCallback(api, store, superAdmins, query) {
       await safeEditOrSend(api, chatId, messageId, "⚠️ المنتج غير موجود.", { reply_markup: homeKeyboard(false) });
       return;
     }
-    const result = store.purchase(userId, product.id);
+    const result = store.purchase(userId, product.id, { quantity: 1 });
     await handlePurchaseResult(api, store, superAdmins, chatId, userId, result);
     return;
   }
@@ -2552,17 +3040,50 @@ async function handleCallback(api, store, superAdmins, query) {
     const topupId = Number(data.split(":")[2]);
     const result = store.approveManualTopup(userId, topupId);
     if (!result.alreadyApproved) {
-      await api.sendMessage(result.topup.user_id, panel("🎉 تم اعتماد شحن الرصيد", [
-        `رقم الطلب: #${result.topup.id}`,
-        `المبلغ المضاف: ${formatMoney(result.topup.amount_piasters)}`,
-        `رصيدك الحالي: ${formatMoney(result.balance)}`,
-      ]), { reply_markup: homeKeyboard(false) }).catch(() => { });
+      let orderData = null;
+      try {
+        if (result.topup.reviewer_note && result.topup.reviewer_note.startsWith("{")) {
+          orderData = JSON.parse(result.topup.reviewer_note);
+        }
+      } catch { }
+
+      if (orderData && orderData.forOrder) {
+        const purchaseResult = store.purchase(result.topup.user_id, orderData.productId, { quantity: orderData.quantity });
+        if (purchaseResult.ok) {
+          if (purchaseResult.order.fulfillment_type === "ready_stock") {
+            await api.sendMessage(result.topup.user_id, panel("🎉 تم اعتماد تحويلك وتسليم طلبك بنجاح!", [
+              `رقم الطلب: #${purchaseResult.order.id}`,
+              `📦 المنتج: ${purchaseResult.product.title}`,
+              `🔢 الكمية: ${purchaseResult.order.quantity} قطعة`,
+              `💰 الإجمالي: ${formatMoney(purchaseResult.order.total_piasters)}`,
+              `💰 رصيدك المتبقي: ${formatMoney(purchaseResult.balance)}`,
+              "",
+              "🔑 وبيانات المنتج/الكود الخاص بك:",
+              purchaseResult.deliveryText,
+            ]), { reply_markup: homeKeyboard(false) }).catch(() => { });
+          } else {
+            await notifyStaffAboutAssistedOrder(api, store, superAdmins, purchaseResult);
+            await api.sendMessage(result.topup.user_id, panel("🎉 تم اعتماد تحويلك واستلام طلبك!", [
+              `رقم الطلب: #${purchaseResult.order.id}`,
+              `📦 المنتج: ${purchaseResult.product.title}`,
+              `🔢 الكمية: ${purchaseResult.order.quantity} قطعة`,
+              "سيقوم الفريق بتجهيز وتسليم المنتج لك في أقرب وقت.",
+            ]), { reply_markup: homeKeyboard(false) }).catch(() => { });
+          }
+        }
+      } else {
+        await api.sendMessage(result.topup.user_id, panel("🎉 تم اعتماد شحن الرصيد", [
+          `رقم الطلب: #${result.topup.id}`,
+          `المبلغ المضاف: ${formatMoney(result.topup.amount_piasters)}`,
+          `رصيدك الحالي: ${formatMoney(result.balance)}`,
+        ]), { reply_markup: homeKeyboard(false) }).catch(() => { });
+      }
     }
-    await safeEditOrSend(api, chatId, messageId, panel("✅ تم اعتماد طلب الشحن", [
+    await safeEditOrSend(api, chatId, messageId, panel("✅ تم اعتماد الطلب بنجاح", [
       `رقم الطلب: #${result.topup.id}`,
       `العميل: ${result.topup.user_id}`,
       `الرصيد بعد الإضافة: ${formatMoney(result.balance)}`,
-      result.alreadyApproved ? "تم اعتماده مسبقاً؛ لم تتم إضافة الرصيد مرة أخرى." : "تمت إضافة الرصيد مرة واحدة بنجاح.",
+      result.alreadyApproved ? "تم اعتماده مسبقاً؛ لم تتم إضافة الرصيد مرة أخرى." : "تم الاعتماد والتسليم بنجاح.",
     ]), { reply_markup: adminKeyboard(true) });
     return;
   }
